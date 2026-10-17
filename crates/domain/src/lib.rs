@@ -7,6 +7,7 @@
 pub mod account;
 pub mod asset;
 pub mod attempt;
+pub mod collection;
 pub mod ids;
 pub mod job;
 pub mod media;
@@ -19,7 +20,14 @@ pub mod variant;
 pub use account::{Capabilities, ConnectedAccount, MissingCapability, NextAction, PublishAccess};
 pub use asset::{Asset, AssetStatus, Permission, PermissionStatus, Rating, Tag};
 pub use attempt::{AttemptOutcome, PublishAttempt};
-pub use ids::{AccountId, AssetId, AttemptId, JobId, MediaFileId, PublicationId, VariantId};
+pub use collection::{
+    ApprovalMode, Collection, CollectionRule, RuleFiring, RuleOutput, RuleSpec, UnattendedGrant,
+    approval_mode,
+};
+pub use ids::{
+    AccountId, AssetId, AttemptId, CollectionId, JobId, MediaFileId, PublicationId, RuleId,
+    VariantId,
+};
 pub use job::{Job, JobKind, JobRecord, JobState, Lease, OverduePolicy, PauseReason};
 pub use media::{Checksum, MediaFile, MediaProperties};
 pub use platform::{MediaRequirements, Platform, ValidationIssue};

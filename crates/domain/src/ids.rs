@@ -78,6 +78,14 @@ id_type!(
     /// Identifies a [`PublishAttempt`](crate::PublishAttempt).
     AttemptId
 );
+id_type!(
+    /// Identifies a [`Collection`](crate::Collection).
+    CollectionId
+);
+id_type!(
+    /// Identifies a [`CollectionRule`](crate::CollectionRule).
+    RuleId
+);
 
 #[cfg(test)]
 mod tests {

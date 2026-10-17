@@ -621,3 +621,8 @@ td.actions {
     grid-template-columns: 1fr;
   }
 }
+
+.collections fieldset.unattended {
+  border-color: var(--warn);
+  margin-top: 1rem;
+}

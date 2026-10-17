@@ -3,11 +3,21 @@
   import { api } from "../lib/api";
   import { platformLabel } from "../lib/format";
   import { pickFolder } from "../lib/tauri";
-  import { PLATFORMS, WEEKDAYS, type AccountView, type Platform, type Preferences, type PostingSlot, type Weekday } from "../lib/types";
+  import {
+    PLATFORMS,
+    WEEKDAYS,
+    type AccountView,
+    type CollectionView,
+    type Platform,
+    type Preferences,
+    type PostingSlot,
+    type Weekday,
+  } from "../lib/types";
   import { errorToast, toast } from "./Toasts.svelte";
 
   let prefs = $state<Preferences | null>(null);
   let accounts = $state<AccountView[]>([]);
+  let collections = $state<CollectionView[]>([]);
   let zones = $state<string[]>([]);
   let graceMinutes = $state(15);
   let newPlatform = $state<Platform>("youtube_shorts");
@@ -26,7 +36,11 @@
 
   async function load() {
     try {
-      [prefs, accounts] = await Promise.all([api.preferences(), api.listAccounts()]);
+      [prefs, accounts, collections] = await Promise.all([
+        api.preferences(),
+        api.listAccounts(),
+        api.listCollections(),
+      ]);
       if (prefs.overduePolicy.kind === "expire") graceMinutes = Math.round(prefs.overduePolicy.grace_secs / 60);
       if (!zones.includes(prefs.timezone)) zones = [prefs.timezone, ...zones];
     } catch (e) {
@@ -147,7 +161,21 @@
         <button onclick={chooseWatchFolder}>Choose…</button>
         {#if prefs.watchFolder}<button onclick={() => update({ watchFolder: null }, "Stopped watching")}>Stop watching</button>{/if}
       </p>
-      <p class="muted">New videos saved here (for example exports from TikTok or an editor) are imported automatically once they finish writing.</p>
+      <p class="muted">
+        New videos saved here (for example a folder your phone or editor syncs to) are imported automatically once
+        they finish writing.
+      </p>
+      <label>
+        Put watch-folder imports in
+        <select
+          value={prefs.watchCollection ?? ""}
+          onchange={(e) => update({ watchCollection: e.currentTarget.value || null })}
+        >
+          <option value="">no collection</option>
+          {#each collections as c (c.id)}<option value={c.id}>{c.name}</option>{/each}
+        </select>
+      </label>
+      <p class="muted">The collection's rules then run for every new import; you still approve each publication.</p>
       <p>
         Export packages go to: <code>{prefs.exportDir ?? "the app's data folder"}</code>
         <button onclick={chooseExportDir}>Choose…</button>

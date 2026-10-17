@@ -45,44 +45,8 @@ impl<'a> Publications<'a> {
 
     /// Inserts a new publication and its first revision.
     pub async fn insert(&self, publication: &Publication) -> StoreResult<()> {
-        let r = publication.record();
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
-            "INSERT INTO publications (id, asset_id, platform, state, current_revision, \
-             account_id, variant_id, approval, schedule_at, schedule_tz, retry_at, user_action, \
-             last_error, published, version, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(r.id.to_string())
-        .bind(r.asset_id.to_string())
-        .bind(r.platform.as_str())
-        .bind(r.state.as_str())
-        .bind(i64::from(r.revision.number))
-        .bind(r.revision.content.destination.account_id.to_string())
-        .bind(r.revision.content.variant_id.to_string())
-        .bind(opt_json(r.approval.as_ref()))
-        .bind(opt_ts(r.schedule.map(|s| s.at)))
-        .bind(r.schedule.map(|s| s.timezone.name()))
-        .bind(opt_ts(r.retry_at))
-        .bind(opt_json(r.user_action.as_ref()))
-        .bind(&r.last_error)
-        .bind(opt_json(r.published.as_ref()))
-        .bind(to_i64(r.version))
-        .bind(ts(r.created_at))
-        .bind(ts(r.updated_at))
-        .execute(&mut *tx)
-        .await?;
-        insert_revision(&mut tx, r.id, &r.revision).await?;
-        log(
-            &mut tx,
-            r.id,
-            None,
-            r.state,
-            "created",
-            r.revision.number,
-            r.created_at,
-        )
-        .await?;
+        insert_publication(&mut tx, publication).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -252,6 +216,46 @@ impl<'a> Publications<'a> {
             })
             .collect()
     }
+}
+
+pub(crate) async fn insert_publication(
+    tx: &mut Transaction<'_, Sqlite>,
+    publication: &Publication,
+) -> StoreResult<()> {
+    let r = publication.record();
+    sqlx::query(
+        "INSERT INTO publications (id, asset_id, platform, state, current_revision,          account_id, variant_id, approval, schedule_at, schedule_tz, retry_at, user_action,          last_error, published, version, created_at, updated_at)          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(r.id.to_string())
+    .bind(r.asset_id.to_string())
+    .bind(r.platform.as_str())
+    .bind(r.state.as_str())
+    .bind(i64::from(r.revision.number))
+    .bind(r.revision.content.destination.account_id.to_string())
+    .bind(r.revision.content.variant_id.to_string())
+    .bind(opt_json(r.approval.as_ref()))
+    .bind(opt_ts(r.schedule.map(|s| s.at)))
+    .bind(r.schedule.map(|s| s.timezone.name()))
+    .bind(opt_ts(r.retry_at))
+    .bind(opt_json(r.user_action.as_ref()))
+    .bind(&r.last_error)
+    .bind(opt_json(r.published.as_ref()))
+    .bind(to_i64(r.version))
+    .bind(ts(r.created_at))
+    .bind(ts(r.updated_at))
+    .execute(&mut **tx)
+    .await?;
+    insert_revision(tx, r.id, &r.revision).await?;
+    log(
+        tx,
+        r.id,
+        None,
+        r.state,
+        "created",
+        r.revision.number,
+        r.created_at,
+    )
+    .await
 }
 
 async fn insert_revision(

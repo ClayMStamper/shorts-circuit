@@ -8,6 +8,7 @@
   import Review from "./components/Review.svelte";
   import Monitor from "./components/Monitor.svelte";
   import Settings from "./components/Settings.svelte";
+  import Collections from "./components/Collections.svelte";
   import Toasts, { toast } from "./components/Toasts.svelte";
 
   type Route =
@@ -15,6 +16,7 @@
     | { view: "asset"; id: string }
     | { view: "review"; id: string }
     | { view: "monitor" }
+    | { view: "collections" }
     | { view: "settings" };
 
   let route = $state<Route>({ view: "library" });
@@ -50,6 +52,9 @@
       case "watchFolderError":
         toast(`Watch folder: ${event.message}`, "bad");
         break;
+      case "rulesFailed":
+        toast(`Collection rules: ${event.message}`, "bad");
+        break;
       case "renderProgress":
         return;
     }
@@ -78,6 +83,9 @@
       <button class:active={route.view === "monitor" || route.view === "review"} onclick={() => go({ view: "monitor" })}>
         Monitor
       </button>
+      <button class:active={route.view === "collections"} onclick={() => go({ view: "collections" })}>
+        Collections
+      </button>
       <button class:active={route.view === "settings"} onclick={() => go({ view: "settings" })}>Settings</button>
     </nav>
   </header>
@@ -102,6 +110,8 @@
       <Review id={route.id} {revision} onBack={() => go({ view: "monitor" })} />
     {:else if route.view === "monitor"}
       <Monitor {revision} onReview={(id) => go({ view: "review", id })} onOpenAsset={(id) => go({ view: "asset", id })} />
+    {:else if route.view === "collections"}
+      <Collections {revision} />
     {:else}
       <Settings />
     {/if}

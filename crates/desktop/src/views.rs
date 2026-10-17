@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use shorts_domain::{
     ConnectedAccount, MediaProperties, NextAction, Permission, Platform, PublicationState,
-    PublishAccess, RenderRecipe, ValidationIssue,
+    PublishAccess, RenderRecipe, RuleOutput, ValidationIssue,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -40,6 +40,7 @@ pub struct MediaView {
 #[serde(rename_all = "camelCase")]
 pub struct AssetDetail {
     pub asset: AssetSummary,
+    pub collections: Vec<CollectionRef>,
     pub variants: Vec<VariantView>,
     pub publications: Vec<PublicationView>,
 }
@@ -193,6 +194,64 @@ pub struct JobView {
 pub struct MonitorView {
     pub publications: Vec<PublicationView>,
     pub jobs: Vec<JobView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionRef {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionView {
+    pub id: String,
+    pub name: String,
+    pub member_count: u32,
+    pub rules: Vec<RuleView>,
+    /// One entry per account: whether unattended publishing is on for this collection.
+    pub unattended: Vec<UnattendedView>,
+    /// Watch-folder imports are routed into this collection.
+    pub watch_folder_target: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleView {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub destinations: Vec<RuleDestinationView>,
+    pub output: RuleOutput,
+    pub caption_template: String,
+    pub hashtags: Vec<String>,
+    pub include_asset_tags: bool,
+    /// Publications this rule has created.
+    pub fired_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleDestinationView {
+    pub account_id: String,
+    pub account_name: String,
+    pub platform_name: &'static str,
+    /// Publications for this destination are approved by the rule, not by the user.
+    pub unattended: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnattendedView {
+    pub account_id: String,
+    pub account_name: String,
+    pub platform_name: &'static str,
+    pub enabled: bool,
+    /// The account can publish automatically, so unattended publishing may be turned on.
+    pub available: bool,
+    pub unavailable_reason: Option<String>,
+    pub enabled_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

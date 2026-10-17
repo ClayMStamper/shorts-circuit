@@ -7,6 +7,7 @@ import type {
   AssetDetail,
   AssetSummary,
   AssetUpdate,
+  CollectionView,
   EditPublication,
   ImportResult,
   LibraryQuery,
@@ -20,6 +21,7 @@ import type {
   PublicationView,
   RenderRecipe,
   ReviewView,
+  RuleInput,
   ScheduleInput,
   TagCount,
   VariantView,
@@ -94,6 +96,21 @@ export const api = {
     call<PublicationView>("resolve_outcome", { id, resolution }),
   exportPackage: (id: string) => call<void>("export_package", { id }),
   nextSlot: (accountId: string) => call<string | null>("next_slot", { accountId }),
+
+  // Collections and rules
+  listCollections: () => call<CollectionView[]>("list_collections"),
+  createCollection: (name: string) => call<CollectionView>("create_collection", { name }),
+  renameCollection: (id: string, name: string) => call<CollectionView>("rename_collection", { id, name }),
+  deleteCollection: (id: string) => call<void>("delete_collection", { id }),
+  addToCollection: (collectionId: string, assetId: string) =>
+    call<string[]>("add_to_collection", { collectionId, assetId }),
+  removeFromCollection: (collectionId: string, assetId: string) =>
+    call<void>("remove_from_collection", { collectionId, assetId }),
+  createRule: (collectionId: string, rule: RuleInput) => call<CollectionView>("create_rule", { collectionId, rule }),
+  updateRule: (id: string, rule: RuleInput) => call<CollectionView>("update_rule", { id, rule }),
+  deleteRule: (id: string) => call<CollectionView>("delete_rule", { id }),
+  setUnattended: (collectionId: string, accountId: string, enabled: boolean) =>
+    call<CollectionView>("set_unattended", { collectionId, accountId, enabled }),
 
   // Monitor
   monitor: () => call<MonitorView>("monitor"),

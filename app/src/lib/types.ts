@@ -194,6 +194,7 @@ export interface PublicationView {
 
 export interface AssetDetail {
   asset: AssetSummary;
+  collections: CollectionRef[];
   variants: VariantView[];
   publications: PublicationView[];
 }
@@ -254,6 +255,8 @@ export interface Preferences {
   watchFolder: string | null;
   exportDir: string | null;
   postingSlots: PostingSlot[];
+  /** Watch-folder imports are added to this collection (and its rules run). */
+  watchCollection: string | null;
 }
 
 export interface PreferencesUpdate {
@@ -262,6 +265,7 @@ export interface PreferencesUpdate {
   watchFolder?: string | null;
   exportDir?: string | null;
   postingSlots?: PostingSlot[];
+  watchCollection?: string | null;
 }
 
 export type ScheduleInput =
@@ -332,7 +336,66 @@ export type AppEvent =
   | { type: "publicationChanged"; id: string }
   | { type: "jobsChanged" }
   | { type: "renderProgress"; variantId: string; fraction: number }
-  | { type: "watchFolderError"; message: string };
+  | { type: "watchFolderError"; message: string }
+  | { type: "collectionsChanged" }
+  | { type: "rulesFailed"; assetId: string; message: string };
+
+export interface CollectionRef {
+  id: string;
+  name: string;
+}
+
+/** What a rule-created publication starts as. */
+export type RuleOutput = "draft" | "awaiting_approval";
+
+export interface RuleDestinationView {
+  accountId: string;
+  accountName: string;
+  platformName: string;
+  /** The rule approves these publications itself (unattended publishing is on). */
+  unattended: boolean;
+}
+
+export interface RuleView {
+  id: string;
+  name: string;
+  enabled: boolean;
+  destinations: RuleDestinationView[];
+  output: RuleOutput;
+  captionTemplate: string;
+  hashtags: string[];
+  includeAssetTags: boolean;
+  firedCount: number;
+}
+
+export interface UnattendedView {
+  accountId: string;
+  accountName: string;
+  platformName: string;
+  enabled: boolean;
+  available: boolean;
+  unavailableReason: string | null;
+  enabledAt: string | null;
+}
+
+export interface CollectionView {
+  id: string;
+  name: string;
+  memberCount: number;
+  rules: RuleView[];
+  unattended: UnattendedView[];
+  watchFolderTarget: boolean;
+}
+
+export interface RuleInput {
+  name: string;
+  enabled: boolean;
+  destinations: string[];
+  output: RuleOutput;
+  captionTemplate: string;
+  hashtags: string[];
+  includeAssetTags: boolean;
+}
 
 export interface AppError {
   kind: string;

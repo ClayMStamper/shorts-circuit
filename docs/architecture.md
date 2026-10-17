@@ -78,6 +78,21 @@ A rule can say: "When an approved video enters this collection, create YouTube a
 publications in the next available slots." Unattended publishing is enabled explicitly per
 collection and account.
 
+As implemented (Increment 2):
+
+- A collection rule fires when an asset enters the collection: added by hand, routed there from
+  the watch folder (a preference), or getting its media while already a member. It creates one
+  publication per destination in that account's next free posting slot (unscheduled when no
+  slot is free) and leaves it `Draft` or `AwaitingApproval`.
+- A rule fires at most once per asset and destination (`rule_firings`), so re-imports,
+  duplicates, and leaving and re-entering the collection create nothing new. New or re-enabled
+  rules don't backfill existing members.
+- Unattended publishing is off by default. It needs an explicit grant for the collection and
+  account *and* an account that can publish automatically; export-package accounts always
+  require approval. Under a grant the rule approves only what it created, once, after the
+  variant is rendered and the review shows no issues; the approval is recorded as
+  `rule:<name>`. Anything else waits for the user.
+
 Approval binds to an **immutable publication revision**. Any change to approved media, copy, or
 destination invalidates that approval and returns the publication to review.
 

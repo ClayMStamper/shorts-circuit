@@ -9,6 +9,7 @@
 
 mod accounts;
 mod app;
+mod collections;
 mod error;
 mod events;
 mod library;
@@ -23,6 +24,7 @@ pub mod views;
 pub mod watch;
 
 pub use app::App;
+pub use collections::RuleInput;
 pub use error::{AppError, AppResult};
 pub use events::AppEvent;
 pub use library::{AssetUpdate, ImportOutcome, LibraryQuery, PermissionInput, VIDEO_EXTENSIONS};

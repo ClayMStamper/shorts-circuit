@@ -184,7 +184,7 @@ async fn settle_loop(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<PathBuf>, co
 
 async fn import(app: &App, path: &Path, seen: &mut BTreeMap<String, Seen>) {
     debug!(path = %path.display(), "watch folder import");
-    match app.import_file(path, None).await {
+    let imported = match app.import_file(path, None).await {
         Ok(outcome) => {
             if let crate::ImportOutcome::Duplicate { asset_id } = outcome {
                 app.emit(AppEvent::Imported {
@@ -192,6 +192,7 @@ async fn import(app: &App, path: &Path, seen: &mut BTreeMap<String, Seen>) {
                     duplicate: true,
                 });
             }
+            Some(outcome.asset_id())
         }
         Err(e) => {
             warn!(path = %path.display(), error = %e, "watch folder import failed");
@@ -203,13 +204,19 @@ async fn import(app: &App, path: &Path, seen: &mut BTreeMap<String, Seen>) {
             if !matches!(e, AppError::Invalid(_)) {
                 return;
             }
+            None
         }
-    }
+    };
     if let Some(fp) = fingerprint(path) {
         seen.insert(path.to_string_lossy().into_owned(), fp);
         if let Err(e) = app.store.settings().set(SEEN_KEY, &*seen).await {
             warn!(error = %e, "could not record watch folder state");
         }
+    }
+    // Routing comes after the file is recorded as handled; it is idempotent, so a crash in
+    // between at worst routes the same asset again on the next start.
+    if let Some(asset_id) = imported {
+        app.route_watched(asset_id).await;
     }
 }
 

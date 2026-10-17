@@ -9,7 +9,7 @@ use shorts_domain::{
 };
 use shorts_media::MediaError;
 use shorts_store::{AssetFilter, PublicationFilter, StoreError};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::app::App;
 use crate::error::{AppError, AppResult};
@@ -172,7 +172,52 @@ impl App {
             duplicate: false,
         });
         self.emit(AppEvent::LibraryChanged);
+        if !new_asset {
+            // A saved link got its media: rules of collections it is already in can fire now.
+            self.apply_rules_quietly(asset.id).await;
+        }
         Ok(ImportOutcome::Imported { asset_id: asset.id })
+    }
+
+    /// A watch-folder import: imports the file, then adds the asset to the collection chosen
+    /// in preferences (if any), which runs that collection's rules. Duplicates are routed too;
+    /// membership and rule firings are idempotent, so nothing is created twice.
+    pub async fn import_watched(&self, path: &Path) -> AppResult<ImportOutcome> {
+        let outcome = self.import_file(path, None).await?;
+        self.route_watched(outcome.asset_id()).await;
+        Ok(outcome)
+    }
+
+    /// Adds a watch-folder import to the routed collection. Failures are reported as events,
+    /// never as a failed import.
+    pub(crate) async fn route_watched(&self, asset_id: AssetId) {
+        let collection = match self.preferences().await {
+            Ok(prefs) => prefs.watch_collection,
+            Err(e) => {
+                warn!(error = %e, "could not read preferences");
+                return;
+            }
+        };
+        let Some(collection) = collection else { return };
+        match self.add_to_collection(collection, asset_id).await {
+            Ok(_) => {}
+            Err(AppError::Store(StoreError::NotFound {
+                entity: "collection",
+                ..
+            })) => {
+                warn!(%collection, "watch-folder collection is gone; routing turned off");
+                if let Err(e) = self.clear_watch_collection().await {
+                    warn!(error = %e, "could not turn routing off");
+                }
+            }
+            Err(e) => {
+                warn!(asset = %asset_id, error = %e, "watch-folder routing failed");
+                self.emit(AppEvent::RulesFailed {
+                    asset_id: asset_id.to_string(),
+                    message: e.to_string(),
+                });
+            }
+        }
     }
 
     /// Copies an original into the managed folder as `<checksum>.<ext>` and marks it read-only.
@@ -304,6 +349,7 @@ impl App {
             publications.push(self.publication_view(&p).await?);
         }
         Ok(AssetDetail {
+            collections: self.asset_collections(id).await?,
             asset: self.summary(asset).await?,
             variants,
             publications,

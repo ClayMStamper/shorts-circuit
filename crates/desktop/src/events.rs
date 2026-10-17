@@ -9,9 +9,26 @@ use serde::Serialize;
 )]
 pub enum AppEvent {
     LibraryChanged,
-    Imported { asset_id: String, duplicate: bool },
-    ImportFailed { path: String, message: String },
-    PublicationChanged { id: String },
+    Imported {
+        asset_id: String,
+        duplicate: bool,
+    },
+    ImportFailed {
+        path: String,
+        message: String,
+    },
+    PublicationChanged {
+        id: String,
+    },
     JobsChanged,
-    RenderProgress { variant_id: String, fraction: f64 },
+    RenderProgress {
+        variant_id: String,
+        fraction: f64,
+    },
+    CollectionsChanged,
+    /// Collection rules could not run for an asset (the import itself succeeded).
+    RulesFailed {
+        asset_id: String,
+        message: String,
+    },
 }

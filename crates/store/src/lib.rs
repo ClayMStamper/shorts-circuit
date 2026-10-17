@@ -8,6 +8,7 @@ mod accounts;
 mod assets;
 mod attempts;
 mod codec;
+mod collections;
 mod jobs;
 mod media_files;
 mod publications;
@@ -25,6 +26,7 @@ use thiserror::Error;
 pub use accounts::Accounts;
 pub use assets::{AssetFilter, Assets};
 pub use attempts::Attempts;
+pub use collections::{CollectionSummary, Collections};
 pub use jobs::{JobFilter, Jobs};
 pub use media_files::MediaFiles;
 pub use publications::{PublicationFilter, PublicationLogEntry, Publications};
@@ -46,6 +48,8 @@ pub enum StoreError {
     Conflict { entity: &'static str, id: String },
     #[error("a file with checksum {checksum} is already in the library")]
     DuplicateMedia { checksum: String },
+    #[error("the name {name:?} is already taken")]
+    DuplicateName { name: String },
     #[error("an open {kind} job already exists for {subject}")]
     DuplicateOpenJob { kind: String, subject: String },
     /// A job transition was refused, e.g. the caller no longer holds the lease.
@@ -152,6 +156,10 @@ impl Store {
         Attempts::new(&self.pool)
     }
 
+    pub fn collections(&self) -> Collections<'_> {
+        Collections::new(&self.pool)
+    }
+
     pub fn settings(&self) -> Settings<'_> {
         Settings::new(&self.pool)
     }
@@ -175,5 +183,27 @@ impl Store {
         variants::insert_variant(&mut tx, variant).await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Records that a rule created `publication`, inserting both in one transaction. Returns
+    /// false, writing nothing, when the rule already fired for this asset and account.
+    pub async fn record_rule_firing(
+        &self,
+        firing: &shorts_domain::RuleFiring,
+        publication: &shorts_domain::Publication,
+    ) -> StoreResult<bool> {
+        if firing.publication_id != publication.id() || firing.asset_id != publication.asset_id() {
+            return Err(StoreError::Corrupt(
+                "rule firing does not match its publication".into(),
+            ));
+        }
+        let mut tx = self.pool.begin().await?;
+        publications::insert_publication(&mut tx, publication).await?;
+        if !collections::insert_firing(&mut tx, firing).await? {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        tx.commit().await?;
+        Ok(true)
     }
 }

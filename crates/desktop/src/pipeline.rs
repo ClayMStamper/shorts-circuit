@@ -294,7 +294,13 @@ impl JobHandler for RenderHandler {
             .require(variant.media_file_id)
             .await
             .map_err(store_failure)?;
-        render_variant(&app, variant, &media).await.map(|_| ())
+        let asset_id = variant.asset_id;
+        render_variant(&app, variant, &media).await?;
+        // Rule-created publications under an unattended grant were waiting for this render.
+        if let Err(e) = app.unattended_approvals(asset_id).await {
+            tracing::warn!(asset = %asset_id, error = %e, "unattended approvals failed");
+        }
+        Ok(())
     }
 
     async fn on_settled(&self, _job: &Job, _disposition: &Disposition) {

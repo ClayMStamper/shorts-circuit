@@ -6,10 +6,11 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use shorts_domain::{
-    Asset, AssetStatus, AttemptOutcome, Checksum, ConnectedAccount, Destination, Job, JobKind,
-    JobState, MediaFile, MediaFileId, MediaProperties, OverduePolicy, PermissionStatus, Platform,
-    Publication, PublicationEvent, PublicationState, PublishAttempt, Rating, RenderRecipe,
-    RevisionContent, Schedule, Tag, TimeZoneName, Variant,
+    Asset, AssetStatus, AttemptOutcome, Checksum, Collection, CollectionRule, ConnectedAccount,
+    Destination, Job, JobKind, JobState, MediaFile, MediaFileId, MediaProperties, OverduePolicy,
+    PermissionStatus, Platform, Publication, PublicationEvent, PublicationState, PublishAttempt,
+    Rating, RenderRecipe, RevisionContent, RuleFiring, RuleId, RuleOutput, RuleSpec, Schedule, Tag,
+    TimeZoneName, UnattendedGrant, Variant,
 };
 use shorts_store::{AssetFilter, JobFilter, PublicationFilter, Store, StoreError};
 use tempfile::TempDir;
@@ -854,4 +855,158 @@ async fn latest_job_for_a_subject_includes_closed_jobs() {
         .unwrap();
     // Job ids are time-ordered, and the second was created later.
     assert_eq!(latest.id(), second.id());
+}
+
+#[tokio::test]
+async fn collections_hold_members_rules_and_grants() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 40).await;
+    let c = Collection::new("Best of", t0()).unwrap();
+    store.collections().insert(&c).await.unwrap();
+    let clash = Collection::new("best OF", t0()).unwrap();
+    assert!(matches!(
+        store.collections().insert(&clash).await,
+        Err(StoreError::DuplicateName { .. })
+    ));
+
+    assert!(
+        store
+            .collections()
+            .add_member(c.id, f.asset.id, t0())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .collections()
+            .add_member(c.id, f.asset.id, t0())
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store.collections().members(c.id).await.unwrap(),
+        vec![f.asset.id]
+    );
+    assert_eq!(
+        store.collections().of_asset(f.asset.id).await.unwrap(),
+        vec![c.clone()]
+    );
+    assert_eq!(store.collections().list().await.unwrap()[0].member_count, 1);
+
+    let rule = CollectionRule::new(
+        c.id,
+        RuleSpec {
+            name: "Cross-post".into(),
+            enabled: true,
+            destinations: vec![f.account.id],
+            output: RuleOutput::AwaitingApproval,
+            caption_template: "{title}".into(),
+            hashtags: vec![],
+            include_asset_tags: false,
+        },
+        t0(),
+    )
+    .unwrap();
+    store.collections().insert_rule(&rule).await.unwrap();
+    assert_eq!(
+        store.collections().rules(c.id).await.unwrap(),
+        vec![rule.clone()]
+    );
+
+    assert!(
+        store
+            .collections()
+            .grant(c.id, f.account.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let grant = UnattendedGrant {
+        collection_id: c.id,
+        account_id: f.account.id,
+        enabled_at: t0(),
+        enabled_by: "owner".into(),
+    };
+    store.collections().set_grant(&grant).await.unwrap();
+    assert_eq!(
+        store.collections().grant(c.id, f.account.id).await.unwrap(),
+        Some(grant)
+    );
+
+    // Deleting the collection removes rules, grants and memberships, not the asset.
+    store.collections().delete(c.id).await.unwrap();
+    assert!(store.collections().rule(rule.id).await.unwrap().is_none());
+    assert!(
+        store
+            .collections()
+            .of_asset(f.asset.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.assets().get(f.asset.id).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn a_rule_fires_once_per_asset_and_account() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 41).await;
+    let rule_id = RuleId::new();
+    let first = draft(&f);
+    let firing = RuleFiring {
+        rule_id,
+        asset_id: f.asset.id,
+        account_id: f.account.id,
+        publication_id: first.id(),
+        unattended: true,
+        auto_approved_at: None,
+        fired_at: t0(),
+    };
+    assert!(store.record_rule_firing(&firing, &first).await.unwrap());
+    assert!(
+        store
+            .collections()
+            .firing_exists(rule_id, f.asset.id, f.account.id)
+            .await
+            .unwrap()
+    );
+
+    // A second firing for the same triple writes nothing, not even the publication.
+    let second = draft(&f);
+    let again = RuleFiring {
+        publication_id: second.id(),
+        ..firing.clone()
+    };
+    assert!(!store.record_rule_firing(&again, &second).await.unwrap());
+    assert!(
+        store
+            .publications()
+            .get(second.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(store.collections().fired_count(rule_id).await.unwrap(), 1);
+
+    assert!(
+        store
+            .collections()
+            .mark_auto_approved(first.id(), t0())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .collections()
+            .mark_auto_approved(first.id(), t0())
+            .await
+            .unwrap()
+    );
+    let stored = store
+        .collections()
+        .firing_for_publication(first.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.auto_approved_at, Some(t0()));
 }

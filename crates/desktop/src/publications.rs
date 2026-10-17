@@ -24,7 +24,7 @@ const PUBLISH_MAX_FAILURES: u32 = 6;
 const SLOT_GAP_MINUTES: i64 = 30;
 const SLOT_HORIZON_DAYS: u32 = 28;
 /// The person approving. There is one user per desktop library for now.
-const APPROVER: &str = "owner";
+pub(crate) const APPROVER: &str = "owner";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(
@@ -258,6 +258,16 @@ impl App {
 
     /// Approves `revision`, which must be the current one, with its rendered media.
     pub async fn approve(&self, id: PublicationId, revision: u32) -> AppResult<PublicationView> {
+        self.approve_as(id, revision, APPROVER).await
+    }
+
+    /// Approval recorded under `by` (the owner, or a rule under an unattended grant).
+    pub(crate) async fn approve_as(
+        &self,
+        id: PublicationId,
+        revision: u32,
+        by: &str,
+    ) -> AppResult<PublicationView> {
         let current = self.store.publications().require(id).await?;
         let variant = self
             .store
@@ -277,7 +287,7 @@ impl App {
             .transition(id, move |_| PublicationEvent::Approve {
                 revision,
                 current_variant_revision: variant_revision,
-                by: APPROVER.to_owned(),
+                by: by.to_owned(),
             })
             .await?;
         self.publication_view(&p).await

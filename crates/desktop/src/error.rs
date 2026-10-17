@@ -3,6 +3,7 @@ use serde::{Serialize, Serializer};
 use shorts_adapters::AdapterError;
 use shorts_domain::TransitionError;
 use shorts_domain::asset::AssetError;
+use shorts_domain::collection::CollectionError;
 use shorts_domain::job::JobError;
 use shorts_domain::schedule::UnknownTimeZone;
 use shorts_domain::variant::VariantError;
@@ -20,6 +21,8 @@ pub enum AppError {
     Variant(#[from] VariantError),
     #[error(transparent)]
     Asset(#[from] AssetError),
+    #[error(transparent)]
+    Collection(#[from] CollectionError),
     #[error(transparent)]
     Media(#[from] MediaError),
     #[error(transparent)]
@@ -41,9 +44,14 @@ impl AppError {
         match self {
             Self::Store(StoreError::NotFound { .. }) | Self::NotFound(_) => "not_found",
             Self::Store(StoreError::Conflict { .. }) => "conflict",
+            Self::Store(StoreError::DuplicateName { .. }) => "invalid",
             Self::Store(_) => "store",
             Self::Transition(_) => "transition",
-            Self::Variant(_) | Self::Asset(_) | Self::TimeZone(_) | Self::Invalid(_) => "invalid",
+            Self::Variant(_)
+            | Self::Asset(_)
+            | Self::Collection(_)
+            | Self::TimeZone(_)
+            | Self::Invalid(_) => "invalid",
             Self::Media(_) => "media",
             Self::Adapter(_) => "adapter",
             Self::Job(_) => "job",

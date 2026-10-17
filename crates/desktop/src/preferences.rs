@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use shorts_domain::{OverduePolicy, TimeZoneName};
+use shorts_domain::{CollectionId, OverduePolicy, TimeZoneName};
 use shorts_scheduler::{PostingPlan, PostingSlot};
 
 use crate::app::App;
@@ -10,6 +10,7 @@ const OVERDUE: &str = "overdue_policy";
 const WATCH_FOLDER: &str = "watch_folder";
 const EXPORT_DIR: &str = "export_dir";
 const POSTING_SLOTS: &str = "posting_slots";
+const WATCH_COLLECTION: &str = "watch_collection";
 
 /// User preferences. The posting slots are interpreted in `timezone`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -20,6 +21,8 @@ pub struct Preferences {
     pub watch_folder: Option<String>,
     pub export_dir: Option<String>,
     pub posting_slots: Vec<PostingSlot>,
+    /// Watch-folder imports are added to this collection (and its rules run).
+    pub watch_collection: Option<CollectionId>,
 }
 
 impl Preferences {
@@ -42,14 +45,16 @@ pub struct PreferencesUpdate {
     #[serde(default, with = "double_option")]
     pub export_dir: Option<Option<String>>,
     pub posting_slots: Option<Vec<PostingSlot>>,
+    #[serde(default, with = "double_option")]
+    pub watch_collection: Option<Option<CollectionId>>,
 }
 
 mod double_option {
     use serde::{Deserialize, Deserializer};
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(
+    pub fn deserialize<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
         d: D,
-    ) -> Result<Option<Option<String>>, D::Error> {
+    ) -> Result<Option<Option<T>>, D::Error> {
         Ok(Some(Option::deserialize(d)?))
     }
 }
@@ -66,7 +71,16 @@ impl App {
             watch_folder: settings.get(WATCH_FOLDER).await?.flatten(),
             export_dir: settings.get(EXPORT_DIR).await?.flatten(),
             posting_slots: settings.get(POSTING_SLOTS).await?.unwrap_or_default(),
+            watch_collection: settings.get(WATCH_COLLECTION).await?.flatten(),
         })
+    }
+
+    pub(crate) async fn clear_watch_collection(&self) -> AppResult<()> {
+        self.store
+            .settings()
+            .set(WATCH_COLLECTION, &None::<CollectionId>)
+            .await?;
+        Ok(())
     }
 
     /// Records the OS timezone on first launch; an explicit user choice is never overwritten.
@@ -104,6 +118,13 @@ impl App {
         }
         if let Some(slots) = update.posting_slots {
             settings.set(POSTING_SLOTS, &slots).await?;
+        }
+        if let Some(collection) = update.watch_collection {
+            if let Some(id) = collection {
+                self.store.collections().require(id).await?;
+            }
+            settings.set(WATCH_COLLECTION, &collection).await?;
+            self.emit(crate::events::AppEvent::CollectionsChanged);
         }
         self.preferences().await
     }

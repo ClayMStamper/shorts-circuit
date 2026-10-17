@@ -5,15 +5,16 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use shorts_desktop::views::{
-    AccountView, AssetDetail, AssetSummary, MonitorView, PublicationView, ReviewView, TagCount,
-    VariantView,
+    AccountView, AssetDetail, AssetSummary, CollectionView, MonitorView, PublicationView,
+    ReviewView, TagCount, VariantView,
 };
 use shorts_desktop::{
     AppError, AssetUpdate, EditPublication, ImportOutcome, LibraryQuery, NewPublication,
-    Preferences, PreferencesUpdate, ScheduleInput,
+    Preferences, PreferencesUpdate, RuleInput, ScheduleInput,
 };
 use shorts_domain::{
-    AccountId, AssetId, JobId, OutcomeResolution, Platform, PublicationId, RenderRecipe, VariantId,
+    AccountId, AssetId, CollectionId, JobId, OutcomeResolution, Platform, PublicationId,
+    RenderRecipe, RuleId, VariantId,
 };
 use tauri::State;
 
@@ -270,6 +271,94 @@ pub async fn next_slot(
     account_id: AccountId,
 ) -> Result<Option<DateTime<Utc>>> {
     shell.app.next_slot(account_id).await
+}
+
+#[tauri::command]
+pub async fn list_collections(shell: State<'_, Shell>) -> Result<Vec<CollectionView>> {
+    shell.app.list_collections().await
+}
+
+#[tauri::command]
+pub async fn create_collection(shell: State<'_, Shell>, name: String) -> Result<CollectionView> {
+    shell.app.create_collection(&name).await
+}
+
+#[tauri::command]
+pub async fn rename_collection(
+    shell: State<'_, Shell>,
+    id: CollectionId,
+    name: String,
+) -> Result<CollectionView> {
+    shell.app.rename_collection(id, &name).await
+}
+
+#[tauri::command]
+pub async fn delete_collection(shell: State<'_, Shell>, id: CollectionId) -> Result<()> {
+    shell.app.delete_collection(id).await
+}
+
+/// Returns the ids of the publications the collection's rules created.
+#[tauri::command]
+pub async fn add_to_collection(
+    shell: State<'_, Shell>,
+    collection_id: CollectionId,
+    asset_id: AssetId,
+) -> Result<Vec<String>> {
+    Ok(shell
+        .app
+        .add_to_collection(collection_id, asset_id)
+        .await?
+        .iter()
+        .map(ToString::to_string)
+        .collect())
+}
+
+#[tauri::command]
+pub async fn remove_from_collection(
+    shell: State<'_, Shell>,
+    collection_id: CollectionId,
+    asset_id: AssetId,
+) -> Result<()> {
+    shell
+        .app
+        .remove_from_collection(collection_id, asset_id)
+        .await
+}
+
+#[tauri::command]
+pub async fn create_rule(
+    shell: State<'_, Shell>,
+    collection_id: CollectionId,
+    rule: RuleInput,
+) -> Result<CollectionView> {
+    shell.app.create_rule(collection_id, rule).await
+}
+
+#[tauri::command]
+pub async fn update_rule(
+    shell: State<'_, Shell>,
+    id: RuleId,
+    rule: RuleInput,
+) -> Result<CollectionView> {
+    shell.app.update_rule(id, rule).await
+}
+
+#[tauri::command]
+pub async fn delete_rule(shell: State<'_, Shell>, id: RuleId) -> Result<CollectionView> {
+    shell.app.delete_rule(id).await
+}
+
+#[tauri::command]
+pub async fn set_unattended(
+    shell: State<'_, Shell>,
+    collection_id: CollectionId,
+    account_id: AccountId,
+    enabled: bool,
+) -> Result<CollectionView> {
+    shell
+        .app
+        .set_unattended(collection_id, account_id, enabled)
+        .await
 }
 
 #[tauri::command]
