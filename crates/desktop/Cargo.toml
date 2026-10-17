@@ -1,0 +1,32 @@
+[package]
+name = "shorts-desktop"
+description = "Desktop application services behind the Tauri shell: import, library, variants, review, scheduling and job handlers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+notify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shorts-adapters.workspace = true
+shorts-domain.workspace = true
+shorts-media.workspace = true
+shorts-scheduler.workspace = true
+shorts-store.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# The Tauri shell has its own lockfile and needs WebView system libraries; CI checks it on Windows.
+exclude = ["app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
@@ -34,6 +36,7 @@ tracing = "0.1"
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
 
 shorts-adapters = { path = "crates/adapters" }
+shorts-desktop = { path = "crates/desktop" }
 shorts-domain = { path = "crates/domain" }
 shorts-media = { path = "crates/media" }
 shorts-scheduler = { path = "crates/scheduler" }
