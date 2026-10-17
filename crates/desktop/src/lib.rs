@@ -3,8 +3,8 @@
 //! [`App`] ties the crates together: it imports files into the library, curates assets, edits
 //! variants, prepares publications for review, schedules them, and registers the job handlers
 //! that render variants and take approved publications through the publish pipeline (manual
-//! handoff, or a platform adapter such as YouTube's once an account is connected through
-//! [`youtube::YouTubeConnector`]). Everything the UI shows comes back as the serializable views
+//! handoff, or a platform adapter once an account is connected through
+//! [`youtube::YouTubeConnector`] or [`instagram::InstagramConnector`]). Everything the UI shows comes back as the serializable views
 //! in [`views`].
 //!
 //! Nothing here holds or exposes credentials; views never include credential references.
@@ -15,6 +15,7 @@ mod collections;
 pub mod credentials;
 mod error;
 mod events;
+pub mod instagram;
 mod library;
 mod matching;
 pub mod media;

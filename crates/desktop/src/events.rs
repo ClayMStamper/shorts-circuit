@@ -35,6 +35,8 @@ pub enum AppEvent {
     TikTokChanged,
     /// A YouTube channel was connected, disconnected or changed, or a sign-in progressed.
     YouTubeChanged,
+    /// An Instagram account was connected, disconnected or renewed.
+    InstagramChanged,
     /// The watch folder was listed (on start, on its timer, or "Check now").
     WatchFolderChecked,
     /// A file might be the original of a pending TikTok post (`asset_id` is the file's asset
