@@ -25,14 +25,14 @@ chrono-tz = { version = "0.10", features = ["serde"] }
 hex = "0.4"
 notify = "8"
 rand = "0.9"
-reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["form", "json", "query", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 sqlx = { version = "0.8", default-features = false, features = ["chrono", "json", "macros", "migrate", "runtime-tokio", "sqlite"] }
 tempfile = "3"
 thiserror = "2"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tokio-util = "0.7"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

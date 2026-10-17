@@ -733,7 +733,7 @@ async fn drive_upload(
                     .await
                     .map_err(adapter_failure)?
                 {
-                    Processing::Pending { poll_after } => {
+                    Processing::Pending { poll_after, .. } => {
                         tokio::select! {
                             () = tokio::time::sleep(poll_after.min(MAX_POLL_WAIT)) => {}
                             () = run.ctx.cancelled() => return Err(JobFailure::LeaseLost),

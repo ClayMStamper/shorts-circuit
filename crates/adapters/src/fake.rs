@@ -167,6 +167,7 @@ impl Adapter for FakeAdapter {
             *polls -= 1;
             return Ok(Processing::Pending {
                 poll_after: Duration::from_millis(1),
+                detail: Some("processing".into()),
             });
         }
         Ok(Processing::Ready)
@@ -193,6 +194,7 @@ impl Adapter for FakeAdapter {
         Ok(PublishedPost {
             remote_id: post.id.clone(),
             url: Some(format!("https://example.invalid/{}", post.id)),
+            note: None,
             post,
         })
     }
@@ -215,6 +217,7 @@ impl Adapter for FakeAdapter {
                 post: PublishedPost {
                     remote_id: id.clone(),
                     url: Some(format!("https://example.invalid/{id}")),
+                    note: None,
                     post: FakePost { id },
                 },
             }
