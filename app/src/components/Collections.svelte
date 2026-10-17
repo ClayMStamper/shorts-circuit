@@ -300,6 +300,7 @@
                 <label class="check">
                   <input type="checkbox" value={a.id} bind:group={form.destinations} />
                   {a.platformName} · {a.displayName}
+                  <span class="muted">{a.automatic ? (a.privateOnly ? "uploads automatically, as private" : "uploads automatically") : "export package"}</span>
                 </label>
               {/each}
               {#if accounts.length === 0}<p class="muted">Add destination accounts in Settings first.</p>{/if}

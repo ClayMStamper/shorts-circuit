@@ -14,6 +14,9 @@ const account: AccountView = {
   missingReason: "No platform API connection is configured for this account.",
   nextAction: "export_package",
   manualHandoff: true,
+  connected: false,
+  privateOnly: false,
+  notes: [],
 };
 
 function collection(overrides: Partial<CollectionView> = {}): CollectionView {
@@ -91,7 +94,7 @@ describe("Collections", () => {
     );
     render(Collections, { revision: 0 });
     await fireEvent.click(await screen.findByRole("button", { name: "Add rule" }));
-    await fireEvent.click(screen.getByRole("checkbox", { name: "YouTube Shorts · Channel" }));
+    await fireEvent.click(screen.getByRole("checkbox", { name: /^YouTube Shorts · Channel\s+export package$/ }));
     await fireEvent.input(screen.getByPlaceholderText("#shorts #recipe"), { target: { value: "#shorts" } });
     await fireEvent.click(screen.getByRole("button", { name: "Save rule" }));
 

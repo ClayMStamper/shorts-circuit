@@ -16,6 +16,7 @@
   } from "../lib/types";
   import { errorToast, toast } from "./Toasts.svelte";
   import TikTokSettings from "./TikTokSettings.svelte";
+  import YouTubeSettings from "./YouTubeSettings.svelte";
 
   let { revision = 0 }: { revision?: number } = $props();
 
@@ -201,6 +202,8 @@
       </p>
     </fieldset>
 
+    <YouTubeSettings {revision} onChanged={async () => (accounts = await api.listAccounts())} />
+
     <TikTokSettings {revision} />
 
     <fieldset>
@@ -209,7 +212,13 @@
         {#each accounts as a (a.id)}
           <li>
             <strong>{a.platformName}</strong> · {a.displayName}
-            <span class="muted">{a.automatic ? "automatic publishing" : `export package — ${a.missingReason ?? ""}`}</span>
+            <span class="muted">
+              {#if a.automatic}
+                uploads automatically{a.privateOnly ? " (as private until the API audit)" : ""}
+              {:else}
+                export package — {a.missingReason ?? ""}
+              {/if}
+            </span>
           </li>
         {/each}
       </ul>
@@ -221,8 +230,8 @@
         <button type="submit">Add account</button>
       </form>
       <p class="muted">
-        Platform sign-in isn't available yet, so every account publishes through export packages: a folder with the
-        rendered video, caption and step-by-step posting instructions.
+        Connect YouTube channels above to upload automatically. Other accounts publish through export packages: a folder
+        with the rendered video, caption and step-by-step posting instructions.
       </p>
     </fieldset>
   {/if}

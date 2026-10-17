@@ -91,6 +91,7 @@ const ACTION_LABELS: Record<Action, string> = {
   confirmPosted: "Mark as posted",
   resolveOutcome: "Record outcome",
   exportPackage: "Export package",
+  reconnect: "Reconnect…",
 };
 
 export function actionLabel(action: Action): string {

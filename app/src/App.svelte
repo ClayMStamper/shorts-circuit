@@ -113,7 +113,12 @@
     {:else if route.view === "review"}
       <Review id={route.id} {revision} onBack={() => go({ view: "monitor" })} />
     {:else if route.view === "monitor"}
-      <Monitor {revision} onReview={(id) => go({ view: "review", id })} onOpenAsset={(id) => go({ view: "asset", id })} />
+      <Monitor
+        {revision}
+        onReview={(id) => go({ view: "review", id })}
+        onOpenAsset={(id) => go({ view: "asset", id })}
+        onSettings={() => go({ view: "settings" })}
+      />
     {:else if route.view === "collections"}
       <Collections {revision} onReview={(id) => go({ view: "review", id })} />
     {:else}

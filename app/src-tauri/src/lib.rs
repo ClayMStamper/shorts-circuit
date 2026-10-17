@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use shorts_adapters::AdapterRegistry;
 use shorts_desktop::tiktok::{TikTokIntake, TikTokSetup};
 use shorts_desktop::watch::{WatchConfig, WatchFolder};
+use shorts_desktop::youtube::{YouTubeConnector, YouTubeSetup};
 use shorts_desktop::{App, AppPaths, FfmpegBackend};
 use shorts_media::{MediaTools, RenderCache, Renderer};
 use shorts_scheduler::{SystemClock, WorkerConfig};
@@ -34,6 +35,8 @@ pub struct Shell {
     pub media: MediaStatus,
     /// Optional TikTok new-post detection; unavailable unless `SHORTS_BROKER_URL` is set.
     pub tiktok: Arc<TikTokIntake>,
+    /// YouTube Shorts publishing; channels are connected in Settings.
+    pub youtube: Arc<YouTubeConnector>,
     pub(crate) watch: Mutex<Option<WatchFolder>>,
     shutdown: CancellationToken,
 }
@@ -102,7 +105,7 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
     let app = App::open(
         paths,
         Arc::new(FfmpegBackend::new(renderer)),
-        // Increment 2 has no provider adapters: every account uses the export package.
+        // Connectors register their adapters below; accounts without one use export packages.
         AdapterRegistry::new(),
         Arc::new(SystemClock),
     )
@@ -110,6 +113,11 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
     if let Ok(tz) = iana_time_zone::get_timezone() {
         app.ensure_timezone(&tz).await?;
     }
+    let youtube = YouTubeConnector::new(
+        app.clone(),
+        YouTubeSetup::from_env(),
+        Arc::new(keyring_store::KeyringCredentials),
+    );
     let shutdown = CancellationToken::new();
     app.start_worker(WorkerConfig::default(), shutdown.clone())
         .await?;
@@ -123,6 +131,7 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
         app,
         media,
         tiktok,
+        youtube,
         watch: Mutex::new(None),
         shutdown,
     })
@@ -215,6 +224,15 @@ pub fn run() {
             commands::tiktok_finish_connect,
             commands::tiktok_disconnect,
             commands::tiktok_check_now,
+            commands::youtube_status,
+            commands::youtube_set_client,
+            commands::youtube_clear_client,
+            commands::youtube_connect,
+            commands::youtube_connect_progress,
+            commands::youtube_cancel_connect,
+            commands::youtube_disconnect,
+            commands::youtube_set_public_uploads,
+            commands::open_link,
             commands::match_suggestions,
             commands::confirm_match,
             commands::dismiss_match,

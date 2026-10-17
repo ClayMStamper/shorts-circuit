@@ -644,3 +644,34 @@ table.activity {
   max-width: 28rem;
   white-space: pre-wrap;
 }
+
+/* YouTube publishing */
+.note {
+  border-left: 3px solid var(--info);
+  background: color-mix(in srgb, var(--info) 8%, var(--panel));
+  padding: 6px 10px;
+  border-radius: 4px;
+  margin: 6px 0;
+}
+
+.youtube h3 {
+  font-size: 1em;
+  margin: 14px 0 6px;
+}
+
+.youtube .channel {
+  display: block;
+  padding: 8px 0;
+}
+
+.youtube .notes {
+  color: var(--muted);
+  margin: 4px 0 8px;
+  padding-left: 18px;
+}
+
+.quota progress {
+  vertical-align: middle;
+  margin-left: 8px;
+  width: 160px;
+}

@@ -9,6 +9,7 @@ use shorts_desktop::views::{
     AccountView, AssetDetail, AssetSummary, CollectionView, MatchSuggestion, MonitorView,
     PublicationView, ReviewView, RuleActivityView, TagCount, VariantView,
 };
+use shorts_desktop::youtube::{YouTubeConnectProgress, YouTubeStatus};
 use shorts_desktop::{
     AppError, AssetUpdate, EditPublication, ImportOutcome, LibraryQuery, NewPublication,
     Preferences, PreferencesUpdate, RuleInput, ScheduleInput,
@@ -419,6 +420,75 @@ pub async fn tiktok_check_now(shell: State<'_, Shell>) -> Result<CheckReport> {
 }
 
 #[tauri::command]
+pub async fn youtube_status(shell: State<'_, Shell>) -> Result<YouTubeStatus> {
+    shell.youtube.status().await
+}
+
+/// Saves the owner's Google OAuth client in the OS credential store. The secret is never sent
+/// back to the webview.
+#[tauri::command]
+pub async fn youtube_set_client(
+    shell: State<'_, Shell>,
+    client_id: String,
+    client_secret: String,
+) -> Result<YouTubeStatus> {
+    shell.youtube.set_client(&client_id, &client_secret).await
+}
+
+#[tauri::command]
+pub async fn youtube_clear_client(shell: State<'_, Shell>) -> Result<YouTubeStatus> {
+    shell.youtube.clear_client().await
+}
+
+/// Opens Google's consent page in the default browser. The UI then calls
+/// `youtube_connect_progress` until it stops reporting `pending`.
+#[tauri::command]
+pub async fn youtube_connect(shell: State<'_, Shell>, account_id: Option<AccountId>) -> Result<()> {
+    let url = shell.youtube.begin_connect(account_id).await?;
+    if url.scheme() != "https" {
+        return Err(AppError::Invalid(
+            "the Google sign-in page must be https".into(),
+        ));
+    }
+    open_external(url.as_str())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn youtube_connect_progress(shell: State<'_, Shell>) -> YouTubeConnectProgress {
+    shell.youtube.connect_progress()
+}
+
+#[tauri::command]
+pub fn youtube_cancel_connect(shell: State<'_, Shell>) {
+    shell.youtube.cancel_connect();
+}
+
+#[tauri::command]
+pub async fn youtube_disconnect(
+    shell: State<'_, Shell>,
+    account_id: AccountId,
+) -> Result<YouTubeStatus> {
+    shell.youtube.disconnect(account_id).await
+}
+
+#[tauri::command]
+pub async fn youtube_set_public_uploads(
+    shell: State<'_, Shell>,
+    account_id: AccountId,
+    public: bool,
+) -> Result<YouTubeStatus> {
+    shell.youtube.set_public_uploads(account_id, public).await
+}
+
+/// Opens a published post (an https link the app recorded) in the default browser.
+#[tauri::command]
+pub fn open_link(url: String) -> Result<()> {
+    let parsed = https_link(&url)?;
+    open_external(&parsed)
+}
+
+#[tauri::command]
 pub async fn match_suggestions(shell: State<'_, Shell>) -> Result<Vec<MatchSuggestion>> {
     shell.app.match_suggestions().await
 }
@@ -515,6 +585,21 @@ fn opener() -> &'static str {
         "open"
     } else {
         "xdg-open"
+    }
+}
+
+/// Accepts only `https://` links without spaces or quotes.
+fn https_link(url: &str) -> Result<String> {
+    let url = url.trim();
+    let ok = url.starts_with("https://")
+        && url.len() < 2048
+        && !url
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || c == '"');
+    if ok {
+        Ok(url.to_owned())
+    } else {
+        Err(AppError::Invalid("only https links can be opened".into()))
     }
 }
 

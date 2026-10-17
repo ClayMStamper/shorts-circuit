@@ -39,7 +39,8 @@ export type Action =
   | "resolveUserAction"
   | "confirmPosted"
   | "resolveOutcome"
-  | "exportPackage";
+  | "exportPackage"
+  | "reconnect";
 
 export type PermissionStatus = "unknown" | "granted" | "denied";
 
@@ -216,6 +217,12 @@ export interface AccountView {
   missingReason: string | null;
   nextAction: NextAction | null;
   manualHandoff: boolean;
+  /** Signed in through a platform API (rather than an export-package destination). */
+  connected: boolean;
+  /** Uploads end up private, e.g. while the YouTube API project is unaudited. */
+  privateOnly: boolean;
+  /** Plain-language limits: visibility, quota, sign-in lifetime. */
+  notes: string[];
 }
 
 export interface PublicationView {
@@ -241,6 +248,12 @@ export interface PublicationView {
   lastError: string | null;
   packageDir: string | null;
   publishedUrl: string | null;
+  /** E.g. "uploaded as private". */
+  publishedNote: string | null;
+  /** Upload progress 0–1 while uploading. */
+  progressFraction: number | null;
+  /** E.g. "YouTube is processing the video (50%)". */
+  progressText: string | null;
   statusText: string;
   actions: Action[];
   updatedAt: string;
@@ -396,6 +409,7 @@ export type AppEvent =
   | { type: "collectionsChanged" }
   | { type: "rulesFailed"; assetId: string; message: string }
   | { type: "tikTokChanged" }
+  | { type: "youTubeChanged" }
   | { type: "watchFolderChecked" }
   | { type: "matchSuggested"; assetId: string | null };
 
@@ -481,3 +495,39 @@ export interface AppError {
   kind: string;
   message: string;
 }
+
+export interface QuotaReport {
+  day: string;
+  uploadsUsed: number;
+  uploadsLimit: number;
+  unitsUsed: number;
+  unitsLimit: number;
+  resetsAt: string;
+  warning: string | null;
+}
+
+export interface YouTubeChannel {
+  accountId: string;
+  displayName: string;
+  connected: boolean;
+  needsReconnect: boolean;
+  lastError: string | null;
+  privateOnly: boolean;
+  notes: string[];
+  connectedAt: string | null;
+  signInExpiresAt: string | null;
+}
+
+export interface YouTubeStatus {
+  clientConfigured: boolean;
+  nextStep: string | null;
+  connecting: boolean;
+  channels: YouTubeChannel[];
+  quota: QuotaReport;
+}
+
+export type YouTubeConnectProgress =
+  | { kind: "idle" }
+  | { kind: "pending" }
+  | { kind: "connected"; account: AccountView }
+  | { kind: "failed"; message: string };

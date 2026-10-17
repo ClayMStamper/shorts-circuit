@@ -30,6 +30,8 @@ import type {
   TagCount,
   TikTokStatus,
   VariantView,
+  YouTubeConnectProgress,
+  YouTubeStatus,
 } from "./types";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -128,6 +130,19 @@ export const api = {
   matchSuggestions: () => call<MatchSuggestion[]>("match_suggestions"),
   confirmMatch: (videoId: string, assetId: string) => call<AssetSummary>("confirm_match", { videoId, assetId }),
   dismissMatch: (videoId: string, assetId: string) => call<void>("dismiss_match", { videoId, assetId }),
+
+  // YouTube publishing
+  youtubeStatus: () => call<YouTubeStatus>("youtube_status"),
+  youtubeSetClient: (clientId: string, clientSecret: string) =>
+    call<YouTubeStatus>("youtube_set_client", { clientId, clientSecret }),
+  youtubeClearClient: () => call<YouTubeStatus>("youtube_clear_client"),
+  youtubeConnect: (accountId: string | null) => call<void>("youtube_connect", { accountId }),
+  youtubeConnectProgress: () => call<YouTubeConnectProgress>("youtube_connect_progress"),
+  youtubeCancelConnect: () => call<void>("youtube_cancel_connect"),
+  youtubeDisconnect: (accountId: string) => call<YouTubeStatus>("youtube_disconnect", { accountId }),
+  youtubeSetPublicUploads: (accountId: string, isPublic: boolean) =>
+    call<YouTubeStatus>("youtube_set_public_uploads", { accountId, public: isPublic }),
+  openLink: (url: string) => call<void>("open_link", { url }),
 
   // Monitor
   monitor: () => call<MonitorView>("monitor"),
