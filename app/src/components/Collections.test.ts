@@ -79,6 +79,9 @@ describe("Collections", () => {
                 captionTemplate: "{title}",
                 hashtags: ["shorts"],
                 includeAssetTags: true,
+                effectiveFrom: "2026-10-30T12:00:00Z",
+                summary:
+                  "Videos that enter \"From phone\" on or after Fri 2026-10-30 08:00 EDT get publications for YouTube Shorts · Channel in their next free posting slots, waiting for your approval.",
                 firedCount: 0,
               },
             ],
@@ -100,12 +103,13 @@ describe("Collections", () => {
         enabled: true,
         destinations: ["acc1"],
         output: "awaiting_approval",
-        captionTemplate: "{title}",
+        captionTemplate: "{caption}",
         hashtags: ["#shorts"],
         includeAssetTags: true,
       },
     });
     expect(await screen.findByTestId("rule")).toBeTruthy();
     expect(screen.getByText(/submitted for your approval/)).toBeTruthy();
+    expect(screen.getByTestId("rule-summary").textContent).toMatch(/on or after Fri 2026-10-30/);
   });
 });

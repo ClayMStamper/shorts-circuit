@@ -12,6 +12,7 @@ fn fast() -> WatchConfig {
     WatchConfig {
         settle: Duration::from_millis(300),
         poll: Duration::from_millis(50),
+        rescan: Duration::from_secs(3600),
     }
 }
 
@@ -107,4 +108,35 @@ async fn unreadable_files_are_reported() {
 async fn watching_a_missing_folder_fails() {
     let h = harness().await;
     assert!(WatchFolder::start(h.app.clone(), h.dir.path().join("nope"), fast()).is_err());
+}
+
+#[tokio::test]
+async fn checks_are_recorded_and_check_now_finds_files() {
+    let h = harness().await;
+    let folder = h.dir.path().join("synced");
+    std::fs::create_dir_all(&folder).unwrap();
+    let mut rx = h.app.subscribe();
+    let watch = WatchFolder::start(h.app.clone(), folder.clone(), fast()).unwrap();
+    watch.check_now().await.unwrap();
+    assert!(
+        h.app
+            .preferences()
+            .await
+            .unwrap()
+            .watch_checked_at
+            .is_some()
+    );
+
+    // "Check now" lists the folder and queues new files for import.
+    drop(watch);
+    let watch = WatchFolder::start(h.app.clone(), folder.clone(), fast()).unwrap();
+    std::fs::write(folder.join("synced.mp4"), b"synced clip").unwrap();
+    watch.check_now().await.unwrap();
+    assert!(matches!(
+        next_import(&mut rx).await,
+        AppEvent::Imported {
+            duplicate: false,
+            ..
+        }
+    ));
 }

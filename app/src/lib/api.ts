@@ -24,6 +24,7 @@ import type {
   PublicationView,
   RenderRecipe,
   ReviewView,
+  RuleActivityView,
   RuleInput,
   ScheduleInput,
   TagCount,
@@ -113,6 +114,7 @@ export const api = {
   createRule: (collectionId: string, rule: RuleInput) => call<CollectionView>("create_rule", { collectionId, rule }),
   updateRule: (id: string, rule: RuleInput) => call<CollectionView>("update_rule", { id, rule }),
   deleteRule: (id: string) => call<CollectionView>("delete_rule", { id }),
+  ruleActivity: (id: string) => call<RuleActivityView>("rule_activity", { id }),
   setUnattended: (collectionId: string, accountId: string, enabled: boolean) =>
     call<CollectionView>("set_unattended", { collectionId, accountId, enabled }),
 
@@ -135,6 +137,7 @@ export const api = {
   // Settings and system
   preferences: () => call<Preferences>("preferences"),
   updatePreferences: (update: PreferencesUpdate) => call<Preferences>("update_preferences", { update }),
+  checkWatchFolder: () => call<Preferences>("check_watch_folder"),
   mediaStatus: () => call<MediaStatus>("media_status"),
   openFolder: (path: string) => call<void>("open_folder", { path }),
 };

@@ -2,6 +2,7 @@
 //! destinations in the next free posting slots. Approval stays required unless the owner
 //! enabled unattended publishing for that collection and account.
 
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use shorts_domain::{
     AccountId, ApprovalMode, AssetId, AssetStatus, Collection, CollectionId, CollectionRule,
@@ -14,7 +15,10 @@ use crate::app::App;
 use crate::error::{AppError, AppResult};
 use crate::events::AppEvent;
 use crate::publications::APPROVER;
-use crate::views::{CollectionRef, CollectionView, RuleDestinationView, RuleView, UnattendedView};
+use crate::views::{
+    CollectionRef, CollectionView, RuleActivityView, RuleDestinationView, RuleItemView, RuleView,
+    UnattendedView,
+};
 
 /// A rule as the UI submits it.
 #[derive(Debug, Clone, Deserialize)]
@@ -32,6 +36,10 @@ pub struct RuleInput {
     pub hashtags: Vec<String>,
     #[serde(default)]
     pub include_asset_tags: bool,
+    /// Act only on assets entering from this instant (and with no older source post). Omitted:
+    /// from now, or unchanged when editing.
+    #[serde(default)]
+    pub effective_from: Option<DateTime<Utc>>,
 }
 
 fn enabled_default() -> bool {
@@ -154,7 +162,8 @@ impl App {
         input: RuleInput,
     ) -> AppResult<CollectionView> {
         self.store.collections().require(collection).await?;
-        let rule = CollectionRule::new(collection, input.into(), self.now())?;
+        let from = input.effective_from;
+        let rule = CollectionRule::new(collection, input.into(), from, self.now())?;
         self.check_destinations(&rule.spec).await?;
         self.store.collections().insert_rule(&rule).await?;
         self.emit(AppEvent::CollectionsChanged);
@@ -163,7 +172,8 @@ impl App {
 
     pub async fn update_rule(&self, id: RuleId, input: RuleInput) -> AppResult<CollectionView> {
         let mut rule = self.store.collections().require_rule(id).await?;
-        rule.replace(input.into(), self.now())?;
+        let from = input.effective_from;
+        rule.replace(input.into(), from, self.now())?;
         self.check_destinations(&rule.spec).await?;
         self.store.collections().update_rule(&rule).await?;
         self.emit(AppEvent::CollectionsChanged);
@@ -243,11 +253,26 @@ impl App {
             return Ok(Vec::new());
         };
         let prefs = self.preferences().await?;
+        let source_posted_at = self
+            .store
+            .tiktok_posts()
+            .for_asset(asset_id)
+            .await?
+            .map(|p| p.posted_at);
         let mut created = Vec::new();
         let mut unattended = false;
         for collection in self.store.collections().of_asset(asset_id).await? {
+            let Some(entered_at) = self
+                .store
+                .collections()
+                .member_since(collection.id, asset_id)
+                .await?
+            else {
+                continue;
+            };
             for rule in self.store.collections().rules(collection.id).await? {
-                if !rule.spec.enabled {
+                // Disabled, or the asset predates the rule: never flood with the back catalog.
+                if !rule.applies_to(entered_at, source_posted_at) {
                     continue;
                 }
                 for account_id in &rule.spec.destinations {
@@ -382,6 +407,131 @@ impl App {
         Ok(())
     }
 
+    async fn rule_view(
+        &self,
+        c: &Collection,
+        rule: &CollectionRule,
+        accounts: &[shorts_domain::ConnectedAccount],
+        grants: &[UnattendedGrant],
+        timezone: shorts_domain::TimeZoneName,
+    ) -> AppResult<RuleView> {
+        let destinations: Vec<RuleDestinationView> = rule
+            .spec
+            .destinations
+            .iter()
+            .map(|id| {
+                let account = accounts.iter().find(|a| a.id == *id);
+                RuleDestinationView {
+                    account_id: id.to_string(),
+                    account_name: account.map(|a| a.display_name.clone()).unwrap_or_default(),
+                    platform_name: account.map(|a| a.platform.display_name()).unwrap_or(""),
+                    unattended: account.is_some_and(|a| {
+                        approval_mode(grants.iter().find(|g| g.account_id == a.id), a)
+                            == ApprovalMode::Unattended
+                    }),
+                }
+            })
+            .collect();
+        Ok(RuleView {
+            id: rule.id.to_string(),
+            name: rule.spec.name.clone(),
+            enabled: rule.spec.enabled,
+            summary: rule_summary(c, rule, &destinations, timezone),
+            destinations,
+            output: rule.spec.output,
+            caption_template: rule.spec.caption_template.clone(),
+            hashtags: rule.spec.hashtags.clone(),
+            include_asset_tags: rule.spec.include_asset_tags,
+            effective_from: rule.effective_from,
+            fired_count: self.store.collections().fired_count(rule.id).await?,
+        })
+    }
+
+    /// One rule's work, like a workflow's content list: every asset it created publications
+    /// for (with each destination's state and next actions), plus members waiting for media.
+    pub async fn rule_activity(&self, id: RuleId) -> AppResult<RuleActivityView> {
+        let rule = self.store.collections().require_rule(id).await?;
+        let c = self.store.collections().require(rule.collection_id).await?;
+        let accounts = self.store.accounts().list().await?;
+        let grants = self.store.collections().grants(c.id).await?;
+        let timezone = self.preferences().await?.timezone;
+        let view = self
+            .rule_view(&c, &rule, &accounts, &grants, timezone)
+            .await?;
+
+        let mut order: Vec<AssetId> = Vec::new();
+        let mut by_asset: std::collections::HashMap<AssetId, Vec<PublicationId>> =
+            std::collections::HashMap::new();
+        for firing in self.store.collections().firings_for_rule(id).await? {
+            if !by_asset.contains_key(&firing.asset_id) {
+                order.push(firing.asset_id);
+            }
+            by_asset
+                .entry(firing.asset_id)
+                .or_default()
+                .push(firing.publication_id);
+        }
+        let mut items = Vec::new();
+        // Members that will get publications once their original file arrives.
+        for asset_id in self.store.collections().members(c.id).await? {
+            if by_asset.contains_key(&asset_id) {
+                continue;
+            }
+            let Some(asset) = self.store.assets().get(asset_id).await? else {
+                continue;
+            };
+            let entered = self
+                .store
+                .collections()
+                .member_since(c.id, asset_id)
+                .await?;
+            let post = self.store.tiktok_posts().for_asset(asset_id).await?;
+            let eligible =
+                entered.is_some_and(|at| rule.applies_to(at, post.as_ref().map(|p| p.posted_at)));
+            if asset.status == AssetStatus::AwaitingMedia && eligible {
+                items.push(self.rule_item(asset_id, Vec::new(), true).await?);
+            }
+        }
+        for asset_id in order {
+            let ids = by_asset.remove(&asset_id).unwrap_or_default();
+            items.push(self.rule_item(asset_id, ids, false).await?);
+        }
+        Ok(RuleActivityView { rule: view, items })
+    }
+
+    async fn rule_item(
+        &self,
+        asset_id: AssetId,
+        publications: Vec<PublicationId>,
+        waiting_for_media: bool,
+    ) -> AppResult<RuleItemView> {
+        let asset = self.store.assets().get(asset_id).await?;
+        let post = self.store.tiktok_posts().for_asset(asset_id).await?;
+        let duration_ms = self
+            .store
+            .media_files()
+            .for_asset(asset_id)
+            .await?
+            .first()
+            .map(|m| m.properties.duration_ms)
+            .or_else(|| post.as_ref().and_then(|p| p.duration_ms));
+        let mut views = Vec::new();
+        for id in publications {
+            if let Some(p) = self.store.publications().get(id).await? {
+                views.push(self.publication_view(&p).await?);
+            }
+        }
+        Ok(RuleItemView {
+            asset_id: asset_id.to_string(),
+            title: asset.as_ref().map(|a| a.title.clone()).unwrap_or_default(),
+            caption: asset.map(|a| a.notes).unwrap_or_default(),
+            duration_ms,
+            source_posted_at: post.map(|p| p.posted_at),
+            waiting_for_media,
+            publications: views,
+        })
+    }
+
     async fn collection_view(
         &self,
         c: &Collection,
@@ -389,36 +539,13 @@ impl App {
     ) -> AppResult<CollectionView> {
         let accounts = self.store.accounts().list().await?;
         let grants = self.store.collections().grants(c.id).await?;
+        let timezone = self.preferences().await?.timezone;
         let mut rules = Vec::new();
         for rule in self.store.collections().rules(c.id).await? {
-            let destinations = rule
-                .spec
-                .destinations
-                .iter()
-                .map(|id| {
-                    let account = accounts.iter().find(|a| a.id == *id);
-                    RuleDestinationView {
-                        account_id: id.to_string(),
-                        account_name: account.map(|a| a.display_name.clone()).unwrap_or_default(),
-                        platform_name: account.map(|a| a.platform.display_name()).unwrap_or(""),
-                        unattended: account.is_some_and(|a| {
-                            approval_mode(grants.iter().find(|g| g.account_id == a.id), a)
-                                == ApprovalMode::Unattended
-                        }),
-                    }
-                })
-                .collect();
-            rules.push(RuleView {
-                id: rule.id.to_string(),
-                name: rule.spec.name.clone(),
-                enabled: rule.spec.enabled,
-                destinations,
-                output: rule.spec.output,
-                caption_template: rule.spec.caption_template.clone(),
-                hashtags: rule.spec.hashtags.clone(),
-                include_asset_tags: rule.spec.include_asset_tags,
-                fired_count: self.store.collections().fired_count(rule.id).await?,
-            });
+            rules.push(
+                self.rule_view(c, &rule, &accounts, &grants, timezone)
+                    .await?,
+            );
         }
         let unattended = accounts
             .iter()
@@ -449,4 +576,48 @@ impl App {
             watch_folder_target: watch_target,
         })
     }
+}
+
+/// The rule in plain words, e.g. "Videos that enter "Phone" on or after Fri 2026-10-30 08:00 EDT
+/// get publications for YouTube Shorts · Channel in their next free posting slots, waiting for
+/// your approval."
+fn rule_summary(
+    c: &Collection,
+    rule: &CollectionRule,
+    destinations: &[RuleDestinationView],
+    timezone: shorts_domain::TimeZoneName,
+) -> String {
+    if !rule.spec.enabled {
+        return "Off: nothing new is created until you turn it on again.".to_owned();
+    }
+    let since = rule
+        .effective_from
+        .with_timezone(&timezone.tz())
+        .format("%a %Y-%m-%d %H:%M %Z");
+    let names: Vec<String> = destinations
+        .iter()
+        .map(|d| format!("{} · {}", d.platform_name, d.account_name))
+        .collect();
+    let mode = match rule.spec.output {
+        RuleOutput::Draft => "as drafts for you to finish",
+        RuleOutput::AwaitingApproval => "waiting for your approval",
+    };
+    let unattended: Vec<&str> = destinations
+        .iter()
+        .filter(|d| d.unattended)
+        .map(|d| d.account_name.as_str())
+        .collect();
+    let mut text = format!(
+        "Videos that enter \"{}\" on or after {since} (TikTok posts: posted on or after then) get \
+         publications for {} in their next free posting slots, {mode}.",
+        c.name,
+        names.join(", ")
+    );
+    if !unattended.is_empty() {
+        text.push_str(&format!(
+            " Unattended publishing is on for {}: those are approved and posted without asking.",
+            unattended.join(", ")
+        ));
+    }
+    text
 }

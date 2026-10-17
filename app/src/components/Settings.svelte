@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { api } from "../lib/api";
   import { platformLabel } from "../lib/format";
+  import { formatDateTime } from "../lib/format";
   import { pickFolder } from "../lib/tauri";
   import {
     PLATFORMS,
@@ -63,6 +64,14 @@
   async function chooseWatchFolder() {
     const dir = await pickFolder();
     if (dir) update({ watchFolder: dir }, "Watching folder");
+  }
+
+  async function checkWatchFolder() {
+    try {
+      prefs = await api.checkWatchFolder();
+    } catch (e) {
+      errorToast(e);
+    }
   }
 
   async function chooseExportDir() {
@@ -164,6 +173,12 @@
         <button onclick={chooseWatchFolder}>Choose…</button>
         {#if prefs.watchFolder}<button onclick={() => update({ watchFolder: null }, "Stopped watching")}>Stop watching</button>{/if}
       </p>
+      {#if prefs.watchFolder}
+        <p class="muted">
+          {prefs.watchCheckedAt ? `Last checked ${formatDateTime(prefs.watchCheckedAt)}` : "Not checked yet"} ·
+          <button class="link" onclick={checkWatchFolder}>Check now</button>
+        </p>
+      {/if}
       <p class="muted">
         New videos saved here (for example a folder your phone or editor syncs to) are imported automatically once
         they finish writing.

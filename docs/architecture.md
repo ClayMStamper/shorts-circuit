@@ -85,8 +85,16 @@ As implemented (Increment 2):
   publication per destination in that account's next free posting slot (unscheduled when no
   slot is free) and leaves it `Draft` or `AwaitingApproval`.
 - A rule fires at most once per asset and destination (`rule_firings`), so re-imports,
-  duplicates, and leaving and re-entering the collection create nothing new. New or re-enabled
-  rules don't backfill existing members.
+  duplicates, and leaving and re-entering the collection create nothing new.
+- Every rule has an `effective_from` instant (default: when it was created or turned back on).
+  It only acts on assets that entered the collection at or after it, and whose source post (if
+  any) went up at or after it, so turning a rule on never floods destinations with the back
+  catalog. An earlier date is an explicit backfill choice. The UI states it in plain words
+  ("Videos that enter … on or after … get publications for …").
+- The default caption reuses the source caption (`{caption}`: the TikTok caption, hashtags
+  included, else the title); each publication's copy can still be edited before approval.
+- Each rule has an activity view, like a workflow's content list: every asset it handled with
+  each destination's state and next action, plus members still waiting for their file.
 - Unattended publishing is off by default. It needs an explicit grant for the collection and
   account *and* an account that can publish automatically; export-package accounts always
   require approval. Under a grant the rule approves only what it created, once, after the
@@ -114,6 +122,12 @@ TikTok is used at most to notice that a post exists:
   the placeholder is removed. Dismissed pairs aren't suggested again.
 - Without a configured TikTok developer app the feature reports itself unavailable with the
   next step (see `docs/human-scope.md`).
+- The watch folder and the TikTok poller both show when they last checked and offer "Check
+  now". The watch folder also relists itself every 10 minutes, since sync clients don't always
+  raise file events.
+- No media fetcher exists: originals never come from TikTok. If official access to original
+  files ever appears, a fetcher would attach the file to the awaiting item through the normal
+  import path (`import_file` with `into`), leaving matching and rules unchanged.
 
 ### Media pipeline
 

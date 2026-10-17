@@ -59,6 +59,7 @@
         toast("A new file may be the original of a TikTok post; check the library.", "info");
         break;
       case "renderProgress":
+      case "watchFolderChecked":
         return;
     }
     revision += 1;
@@ -114,7 +115,7 @@
     {:else if route.view === "monitor"}
       <Monitor {revision} onReview={(id) => go({ view: "review", id })} onOpenAsset={(id) => go({ view: "asset", id })} />
     {:else if route.view === "collections"}
-      <Collections {revision} />
+      <Collections {revision} onReview={(id) => go({ view: "review", id })} />
     {:else}
       <Settings {revision} />
     {/if}

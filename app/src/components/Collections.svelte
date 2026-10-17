@@ -1,9 +1,12 @@
 <script lang="ts">
   import { api } from "../lib/api";
-  import type { AccountView, CollectionView, RuleInput, RuleOutput, RuleView } from "../lib/types";
+  import { formatDateTime, formatDuration } from "../lib/format";
+  import type { AccountView, CollectionView, RuleActivityView, RuleInput, RuleOutput, RuleView } from "../lib/types";
+  import Badge from "./Badge.svelte";
   import { errorToast, toast } from "./Toasts.svelte";
 
-  let { revision }: { revision: number } = $props();
+  let { revision, onReview = () => {} }: { revision: number; onReview?: (publicationId: string) => void } =
+    $props();
 
   let collections = $state<CollectionView[]>([]);
   let accounts = $state<AccountView[]>([]);
@@ -13,6 +16,9 @@
   let showRuleForm = $state(false);
   let form = $state<RuleInput>(blankRule());
   let hashtagText = $state("");
+  /** `YYYY-MM-DD` to also include videos from that day; empty means from now. */
+  let startDate = $state("");
+  let activity = $state<RuleActivityView | null>(null);
 
   const selected = $derived(collections.find((c) => c.id === selectedId) ?? null);
 
@@ -22,7 +28,7 @@
       enabled: true,
       destinations: [],
       output: "awaiting_approval",
-      captionTemplate: "{title}",
+      captionTemplate: "{caption}",
       hashtags: [],
       includeAssetTags: true,
     };
@@ -91,6 +97,7 @@
         }
       : blankRule();
     hashtagText = form.hashtags.join(" ");
+    startDate = "";
     showRuleForm = true;
   }
 
@@ -98,6 +105,7 @@
     event.preventDefault();
     if (!selected) return;
     const rule: RuleInput = { ...form, hashtags: hashtagText.split(/[\s,]+/).filter(Boolean) };
+    if (startDate) rule.effectiveFrom = new Date(`${startDate}T00:00`).toISOString();
     try {
       replace(editingRule ? await api.updateRule(editingRule, rule) : await api.createRule(selected.id, rule));
       showRuleForm = false;
@@ -124,6 +132,28 @@
       errorToast(e);
     }
   }
+
+  async function showActivity(rule: RuleView) {
+    if (activity?.rule.id === rule.id) {
+      activity = null;
+      return;
+    }
+    try {
+      activity = await api.ruleActivity(rule.id);
+    } catch (e) {
+      errorToast(e);
+    }
+  }
+
+  $effect(() => {
+    void revision;
+    const id = activity?.rule.id;
+    if (id)
+      api
+        .ruleActivity(id)
+        .then((a) => (activity = a))
+        .catch(() => {});
+  });
 
   async function deleteRule(rule: RuleView) {
     try {
@@ -218,9 +248,45 @@
                 <span class="badge warn">unattended: {r.destinations.filter((d) => d.unattended).map((d) => d.accountName).join(", ")}</span>
               {/if}
               <span class="muted">{r.firedCount} created</span>
+              <p class="rule-summary" data-testid="rule-summary">{r.summary}</p>
+              <button onclick={() => showActivity(r)}>{activity?.rule.id === r.id ? "Hide activity" : "Activity"}</button>
               <button onclick={() => startRule(r)}>Edit</button>
               <button onclick={() => toggleRule(r)}>{r.enabled ? "Turn off" : "Turn on"}</button>
               <button onclick={() => deleteRule(r)}>Delete</button>
+              {#if activity?.rule.id === r.id}
+                <table class="activity" aria-label={`What ${r.name} did`}>
+                  <thead><tr><th>Video</th><th>Destinations</th></tr></thead>
+                  <tbody>
+                    {#each activity.items as item (item.assetId)}
+                      <tr>
+                        <td>
+                          <strong>{item.title}</strong>
+                          {#if item.durationMs !== null}<span class="muted">{formatDuration(item.durationMs)}</span>{/if}
+                          {#if item.sourcePostedAt}<div class="muted">Posted on TikTok {formatDateTime(item.sourcePostedAt)}</div>{/if}
+                          {#if item.caption}<div class="muted caption-preview">{item.caption}</div>{/if}
+                        </td>
+                        <td>
+                          {#if item.waitingForMedia}
+                            <span class="muted">Waiting for the original file; publications are created when it arrives.</span>
+                          {/if}
+                          {#each item.publications as p (p.id)}
+                            <div class="row">
+                              <Badge state={p.state} />
+                              {p.platformName} · {p.accountName}
+                              {#if p.publishedUrl}<span class="muted">{p.publishedUrl}</span>{/if}
+                              <span class="muted">{p.scheduledLocal ?? "no time set"}</span>
+                              <button onclick={() => onReview(p.id)}>{p.actions.includes("approve") ? "Review" : "Open"}</button>
+                            </div>
+                          {/each}
+                        </td>
+                      </tr>
+                    {/each}
+                    {#if activity.items.length === 0}
+                      <tr><td colspan="2" class="muted">Nothing yet. Videos that enter from now on show up here.</td></tr>
+                    {/if}
+                  </tbody>
+                </table>
+              {/if}
             </li>
           {/each}
         </ul>
@@ -247,9 +313,21 @@
               Caption
               <input bind:value={form.captionTemplate} />
             </label>
-            <p class="muted">Use {"{title}"}, {"{creator}"} and {"{notes}"} for the video's details.</p>
+            <p class="muted">
+              {"{caption}"} reuses the source caption (the TikTok caption, hashtags included) or the title; {"{title}"},
+              {"{creator}"} and {"{notes}"} also work. Edit any publication's copy before approving.
+            </p>
             <label>Hashtags <input bind:value={hashtagText} placeholder="#shorts #recipe" /></label>
             <label class="check"><input type="checkbox" bind:checked={form.includeAssetTags} /> Also use the video's tags</label>
+            <label>
+              Start from
+              <input type="date" bind:value={startDate} aria-label="Start from date" />
+            </label>
+            <p class="muted">
+              {editingRule ? "Leave empty to keep the current start." : "Leave empty to start now."} Only videos that
+              enter the collection from then on (and TikTok posts from then on) get publications, so turning a rule on
+              never floods your accounts with older videos.
+            </p>
             <div class="row">
               <button type="submit" class="primary" disabled={form.destinations.length === 0}>Save rule</button>
               <button type="button" onclick={() => (showRuleForm = false)}>Cancel</button>

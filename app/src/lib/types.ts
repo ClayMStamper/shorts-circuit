@@ -311,6 +311,8 @@ export interface Preferences {
   postingSlots: PostingSlot[];
   /** Watch-folder imports are added to this collection (and its rules run). */
   watchCollection: string | null;
+  /** When the watch folder was last listed. */
+  watchCheckedAt: string | null;
 }
 
 export interface PreferencesUpdate {
@@ -394,6 +396,7 @@ export type AppEvent =
   | { type: "collectionsChanged" }
   | { type: "rulesFailed"; assetId: string; message: string }
   | { type: "tikTokChanged" }
+  | { type: "watchFolderChecked" }
   | { type: "matchSuggested"; assetId: string | null };
 
 export interface CollectionRef {
@@ -421,7 +424,26 @@ export interface RuleView {
   captionTemplate: string;
   hashtags: string[];
   includeAssetTags: boolean;
+  effectiveFrom: string;
+  /** What the rule does in plain words, including when it started. */
+  summary: string;
   firedCount: number;
+}
+
+export interface RuleItemView {
+  assetId: string;
+  title: string;
+  caption: string;
+  durationMs: number | null;
+  sourcePostedAt: string | null;
+  /** In the collection, but the original file hasn't arrived yet. */
+  waitingForMedia: boolean;
+  publications: PublicationView[];
+}
+
+export interface RuleActivityView {
+  rule: RuleView;
+  items: RuleItemView[];
 }
 
 export interface UnattendedView {
@@ -451,6 +473,8 @@ export interface RuleInput {
   captionTemplate: string;
   hashtags: string[];
   includeAssetTags: boolean;
+  /** Only videos entering from this instant; omitted means now (or unchanged when editing). */
+  effectiveFrom?: string | null;
 }
 
 export interface AppError {

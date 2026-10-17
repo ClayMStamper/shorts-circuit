@@ -18,7 +18,7 @@ use crate::ids::{AccountId, AssetId, CollectionId, PublicationId, RuleId};
 
 pub const MAX_NAME_CHARS: usize = 80;
 /// The caption a new rule uses unless the user picks another template.
-pub const DEFAULT_CAPTION_TEMPLATE: &str = "{title}";
+pub const DEFAULT_CAPTION_TEMPLATE: &str = "{caption}";
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum CollectionError {
@@ -88,7 +88,8 @@ pub struct RuleSpec {
     /// Destination accounts, in the order publications are created.
     pub destinations: Vec<AccountId>,
     pub output: RuleOutput,
-    /// Caption with `{title}`, `{creator}` and `{notes}` placeholders.
+    /// Caption with `{caption}` (the source caption, e.g. from TikTok, else the title),
+    /// `{title}`, `{creator}` and `{notes}` placeholders.
     pub caption_template: String,
     /// Hashtags added to every publication, before the asset's own tags.
     pub hashtags: Vec<String>,
@@ -120,35 +121,74 @@ pub struct CollectionRule {
     pub id: RuleId,
     pub collection_id: CollectionId,
     pub spec: RuleSpec,
+    /// The rule only acts on assets that entered the collection at or after this instant, and
+    /// whose source post (if any) is no older, so turning a rule on never floods destinations
+    /// with the back catalog.
+    pub effective_from: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
 impl CollectionRule {
+    /// `effective_from` defaults to now; an earlier instant is an explicit backfill choice.
     pub fn new(
         collection_id: CollectionId,
         spec: RuleSpec,
+        effective_from: Option<DateTime<Utc>>,
         now: DateTime<Utc>,
     ) -> Result<Self, CollectionError> {
         Ok(Self {
             id: RuleId::new(),
             collection_id,
             spec: spec.validate()?,
+            effective_from: effective_from.unwrap_or(now),
             created_at: now,
             updated_at: now,
         })
     }
 
-    pub fn replace(&mut self, spec: RuleSpec, now: DateTime<Utc>) -> Result<(), CollectionError> {
-        self.spec = spec.validate()?;
+    /// Replaces the spec. Turning a disabled rule back on restarts it from now unless an
+    /// explicit `effective_from` is given.
+    pub fn replace(
+        &mut self,
+        spec: RuleSpec,
+        effective_from: Option<DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) -> Result<(), CollectionError> {
+        let spec = spec.validate()?;
+        let reenabled = spec.enabled && !self.spec.enabled;
+        self.spec = spec;
+        match effective_from {
+            Some(at) => self.effective_from = at,
+            None if reenabled => self.effective_from = now,
+            None => {}
+        }
         self.updated_at = now;
         Ok(())
     }
 
+    /// Whether the rule acts on an asset that entered the collection at `entered_at` and whose
+    /// source post (if it has one) went up at `source_posted_at`.
+    pub fn applies_to(
+        &self,
+        entered_at: DateTime<Utc>,
+        source_posted_at: Option<DateTime<Utc>>,
+    ) -> bool {
+        self.spec.enabled
+            && entered_at >= self.effective_from
+            && source_posted_at.is_none_or(|p| p >= self.effective_from)
+    }
+
     /// The caption for `asset`: the template with its placeholders filled in.
     pub fn caption_for(&self, asset: &Asset) -> String {
+        let caption = if asset.notes.trim().is_empty() {
+            asset.title.as_str()
+        } else {
+            asset.notes.trim()
+        };
         self.spec
             .caption_template
+            .replace("{caption}", caption)
             .replace("{title}", &asset.title)
             .replace("{creator}", asset.creator.as_deref().unwrap_or(""))
             .replace("{notes}", asset.notes.trim())
@@ -258,14 +298,14 @@ mod tests {
         let a = AccountId::new();
         let c = CollectionId::new();
         assert_eq!(
-            CollectionRule::new(c, spec(vec![]), now()),
+            CollectionRule::new(c, spec(vec![]), None, now()),
             Err(CollectionError::NoDestinations)
         );
         assert_eq!(
-            CollectionRule::new(c, spec(vec![a, a]), now()),
+            CollectionRule::new(c, spec(vec![a, a]), None, now()),
             Err(CollectionError::DuplicateDestination)
         );
-        let rule = CollectionRule::new(c, spec(vec![a]), now()).unwrap();
+        let rule = CollectionRule::new(c, spec(vec![a]), None, now()).unwrap();
         assert_eq!(rule.spec.name, "Cross-post");
         assert_eq!(rule.spec.caption_template, DEFAULT_CAPTION_TEMPLATE);
     }
@@ -277,9 +317,51 @@ mod tests {
         asset.add_tag(Tag::parse("bread").unwrap(), now());
         let mut s = spec(vec![AccountId::new()]);
         s.caption_template = "{title} by {creator} {unknown}".into();
-        let rule = CollectionRule::new(CollectionId::new(), s, now()).unwrap();
+        let rule = CollectionRule::new(CollectionId::new(), s, None, now()).unwrap();
         assert_eq!(rule.caption_for(&asset), "Sourdough by Bee {unknown}");
         assert_eq!(rule.hashtags_for(&asset), vec!["shorts", "bread"]);
+
+        // The default reuses the source caption (hashtags included), else the title.
+        let default = CollectionRule::new(
+            CollectionId::new(),
+            spec(vec![AccountId::new()]),
+            None,
+            now(),
+        )
+        .unwrap();
+        assert_eq!(default.caption_for(&asset), "Sourdough");
+        asset.notes = "Crumb shot #bread
+"
+        .into();
+        assert_eq!(default.caption_for(&asset), "Crumb shot #bread");
+    }
+
+    #[test]
+    fn rules_start_from_their_effective_time() {
+        let later = now() + chrono::Duration::hours(1);
+        let mut rule = CollectionRule::new(
+            CollectionId::new(),
+            spec(vec![AccountId::new()]),
+            None,
+            now(),
+        )
+        .unwrap();
+        assert!(rule.applies_to(now(), None));
+        assert!(!rule.applies_to(now() - chrono::Duration::seconds(1), None));
+        // A source post older than the rule doesn't count, even if it entered later.
+        assert!(!rule.applies_to(later, Some(now() - chrono::Duration::days(3))));
+        assert!(rule.applies_to(later, Some(now())));
+
+        // Turning it off and on restarts it from that moment.
+        let mut off = rule.spec.clone();
+        off.enabled = false;
+        rule.replace(off.clone(), None, now()).unwrap();
+        assert!(!rule.applies_to(later, None));
+        let mut on = off;
+        on.enabled = true;
+        rule.replace(on, None, later).unwrap();
+        assert_eq!(rule.effective_from, later);
+        assert!(!rule.applies_to(now(), None));
     }
 
     #[test]

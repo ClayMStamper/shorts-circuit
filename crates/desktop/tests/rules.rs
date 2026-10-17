@@ -71,6 +71,7 @@ fn rule(destinations: Vec<AccountId>) -> RuleInput {
         caption_template: "{title} 🍞".into(),
         hashtags: vec!["shorts".into()],
         include_asset_tags: true,
+        effective_from: None,
     }
 }
 
@@ -418,4 +419,49 @@ async fn approval_stays_required_when_the_grant_is_withdrawn_or_review_has_issue
     let p = h.app.store().publications().require(b).await.unwrap();
     assert_eq!(p.state(), PublicationState::AwaitingApproval);
     assert!(!p.has_valid_approval());
+}
+
+#[tokio::test]
+async fn rules_ignore_the_back_catalog_and_say_when_they_started() {
+    let h = harness().await;
+    posting_slots(&h).await;
+    let yt = account(&h, Platform::YoutubeShorts, "Channel").await;
+    let c = collection(&h, "Phone").await;
+    // Already in the collection before the rule existed.
+    let old = imported(&h, "old.mp4").await;
+    h.app.add_to_collection(c, old).await.unwrap();
+
+    h.clock.advance(chrono::Duration::hours(1));
+    let view = h.app.create_rule(c, rule(vec![yt])).await.unwrap();
+    let r = &view.rules[0];
+    assert_eq!(r.effective_from, t0() + chrono::Duration::hours(1));
+    assert!(
+        r.summary.contains("on or after Fri 2026-10-30 09:00 EDT"),
+        "{}",
+        r.summary
+    );
+    assert!(r.summary.contains("YouTube Shorts · Channel"));
+    assert!(r.summary.contains("waiting for your approval"));
+
+    // Running the rules again (e.g. after a re-import) still skips the old member.
+    assert_eq!(h.app.apply_rules(old).await.unwrap(), vec![]);
+    let new = imported(&h, "new.mp4").await;
+    assert_eq!(h.app.add_to_collection(c, new).await.unwrap().len(), 1);
+    let link = h
+        .app
+        .save_link("https://www.tiktok.com/@baker/video/9", Some("Pending"))
+        .await
+        .unwrap();
+    h.app.add_to_collection(c, link).await.unwrap();
+
+    // The rule's activity: the pending link waiting for its file, then what it created.
+    let activity = h.app.rule_activity(r.id.parse().unwrap()).await.unwrap();
+    assert_eq!(activity.items.len(), 2);
+    assert!(activity.items[0].waiting_for_media);
+    assert_eq!(activity.items[0].title, "Pending");
+    assert_eq!(activity.items[1].asset_id, new.to_string());
+    let p = &activity.items[1].publications[0];
+    assert_eq!(p.state, PublicationState::AwaitingApproval);
+    assert!(p.actions.contains(&shorts_desktop::views::Action::Approve));
+    assert_eq!(activity.items[1].duration_ms, Some(20_000));
 }

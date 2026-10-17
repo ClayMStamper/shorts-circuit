@@ -33,6 +33,8 @@ pub enum AppEvent {
     },
     /// The TikTok connector's status changed.
     TikTokChanged,
+    /// The watch folder was listed (on start, on its timer, or "Check now").
+    WatchFolderChecked,
     /// A file might be the original of a pending TikTok post (`asset_id` is the file's asset
     /// when one import triggered it).
     MatchSuggested {

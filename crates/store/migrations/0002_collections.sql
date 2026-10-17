@@ -16,12 +16,14 @@ CREATE TABLE collection_members (
 CREATE INDEX collection_members_by_asset ON collection_members (asset_id);
 
 CREATE TABLE collection_rules (
-    id            TEXT PRIMARY KEY NOT NULL,
-    collection_id TEXT NOT NULL REFERENCES collections (id) ON DELETE CASCADE,
+    id             TEXT PRIMARY KEY NOT NULL,
+    collection_id  TEXT NOT NULL REFERENCES collections (id) ON DELETE CASCADE,
     -- Serialized RuleSpec: name, enabled, destinations, output, caption template, hashtags.
-    spec          TEXT NOT NULL,
-    created_at    TEXT NOT NULL,
-    updated_at    TEXT NOT NULL
+    spec           TEXT NOT NULL,
+    -- Only assets entering at or after this instant (and with no older source post) count.
+    effective_from TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
 );
 CREATE INDEX collection_rules_by_collection ON collection_rules (collection_id);
 

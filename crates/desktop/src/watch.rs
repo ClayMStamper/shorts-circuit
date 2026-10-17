@@ -1,5 +1,7 @@
-//! Watch folder: imports videos that appear in a folder (e.g. where exports from TikTok or an
-//! editing tool land) once they have finished being written.
+//! Watch folder: imports videos that appear in a folder (e.g. one the phone or editing tool
+//! syncs to) once they have finished being written. File events are backed by a periodic
+//! rescan, since synced folders don't always report changes, and the last check is recorded so
+//! the UI can show "last checked … · Check now".
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -8,7 +10,7 @@ use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
 use crate::app::App;
@@ -23,6 +25,8 @@ pub struct WatchConfig {
     /// A file must keep the same size for this long before it is imported.
     pub settle: Duration,
     pub poll: Duration,
+    /// How often the whole folder is listed again.
+    pub rescan: Duration,
 }
 
 impl Default for WatchConfig {
@@ -30,6 +34,7 @@ impl Default for WatchConfig {
         Self {
             settle: Duration::from_secs(3),
             poll: Duration::from_millis(500),
+            rescan: Duration::from_secs(10 * 60),
         }
     }
 }
@@ -44,6 +49,7 @@ struct Seen {
 /// A running watch. Dropping it stops watching.
 pub struct WatchFolder {
     dir: PathBuf,
+    scan: mpsc::UnboundedSender<oneshot::Sender<()>>,
     _watcher: RecommendedWatcher,
     task: tokio::task::JoinHandle<()>,
 }
@@ -57,6 +63,20 @@ impl Drop for WatchFolder {
 impl WatchFolder {
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// Lists the folder now. The request is sent immediately; the returned future (which
+    /// doesn't borrow the watch) resolves once new files are queued for import.
+    pub fn check_now(&self) -> impl std::future::Future<Output = AppResult<()>> + Send + 'static {
+        let (done, wait) = oneshot::channel();
+        let sent = self.scan.send(done).is_ok();
+        async move {
+            let stopped = || AppError::Invalid("the watch folder stopped".into());
+            if !sent {
+                return Err(stopped());
+            }
+            wait.await.map_err(|_| stopped())
+        }
     }
 
     /// Starts watching `dir` (not recursively). Existing files are considered too.
@@ -88,14 +108,13 @@ impl WatchFolder {
             .watch(&dir, RecursiveMode::NonRecursive)
             .map_err(|e| AppError::Invalid(format!("cannot watch {}: {e}", dir.display())))?;
 
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let _ = tx.send(entry.path());
-            }
-        }
-        let task = tokio::spawn(settle_loop(app, rx, config));
+        drop(tx);
+        let (scan, scans) = mpsc::unbounded_channel();
+        // The rescan timer fires immediately, so existing files are considered too.
+        let task = tokio::spawn(settle_loop(app, dir.clone(), rx, scans, config));
         Ok(Self {
             dir,
+            scan,
             _watcher: watcher,
             task,
         })
@@ -131,7 +150,37 @@ struct Pending {
     since: Instant,
 }
 
-async fn settle_loop(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<PathBuf>, config: WatchConfig) {
+fn list(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .map(|entries| entries.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default()
+}
+
+fn consider(path: PathBuf, seen: &BTreeMap<String, Seen>, pending: &mut HashMap<PathBuf, Pending>) {
+    if !candidate(&path) {
+        return;
+    }
+    let Some(fp) = fingerprint(&path) else { return };
+    if seen.get(&path.to_string_lossy().into_owned()) == Some(&fp) {
+        return;
+    }
+    let entry = pending.entry(path).or_insert(Pending {
+        size: fp.size,
+        since: Instant::now(),
+    });
+    if entry.size != fp.size {
+        entry.size = fp.size;
+        entry.since = Instant::now();
+    }
+}
+
+async fn settle_loop(
+    app: Arc<App>,
+    dir: PathBuf,
+    mut rx: mpsc::UnboundedReceiver<PathBuf>,
+    mut scans: mpsc::UnboundedReceiver<oneshot::Sender<()>>,
+    config: WatchConfig,
+) {
     let mut seen: BTreeMap<String, Seen> = app
         .store
         .settings()
@@ -142,22 +191,26 @@ async fn settle_loop(app: Arc<App>, mut rx: mpsc::UnboundedReceiver<PathBuf>, co
         .unwrap_or_default();
     let mut pending: HashMap<PathBuf, Pending> = HashMap::new();
     let mut ticker = tokio::time::interval(config.poll);
+    let mut rescan = tokio::time::interval(config.rescan);
     loop {
         tokio::select! {
             path = rx.recv() => {
                 let Some(path) = path else { return };
-                if !candidate(&path) {
-                    continue;
+                consider(path, &seen, &mut pending);
+            }
+            _ = rescan.tick() => {
+                for path in list(&dir) {
+                    consider(path, &seen, &mut pending);
                 }
-                let Some(fp) = fingerprint(&path) else { continue };
-                if seen.get(&path.to_string_lossy().into_owned()) == Some(&fp) {
-                    continue;
+                app.record_watch_check().await;
+            }
+            done = scans.recv() => {
+                let Some(done) = done else { continue };
+                for path in list(&dir) {
+                    consider(path, &seen, &mut pending);
                 }
-                let entry = pending.entry(path).or_insert(Pending { size: fp.size, since: Instant::now() });
-                if entry.size != fp.size {
-                    entry.size = fp.size;
-                    entry.since = Instant::now();
-                }
+                app.record_watch_check().await;
+                let _ = done.send(());
             }
             _ = ticker.tick() => {
                 let mut ready = Vec::new();

@@ -266,8 +266,34 @@ pub struct RuleView {
     pub caption_template: String,
     pub hashtags: Vec<String>,
     pub include_asset_tags: bool,
+    pub effective_from: DateTime<Utc>,
+    /// What the rule does, in plain words, including when it started.
+    pub summary: String,
     /// Publications this rule has created.
     pub fired_count: u32,
+}
+
+/// A rule and the assets it handled, newest first.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleActivityView {
+    pub rule: RuleView,
+    pub items: Vec<RuleItemView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleItemView {
+    pub asset_id: String,
+    pub title: String,
+    /// The source caption (TikTok) or notes.
+    pub caption: String,
+    pub duration_ms: Option<u64>,
+    pub source_posted_at: Option<DateTime<Utc>>,
+    /// In the collection, but its original file hasn't arrived yet.
+    pub waiting_for_media: bool,
+    /// One per destination, with state, status text and available actions.
+    pub publications: Vec<PublicationView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

@@ -7,7 +7,7 @@ use serde::Serialize;
 use shorts_desktop::tiktok::{CheckReport, ConnectProgress, TikTokStatus};
 use shorts_desktop::views::{
     AccountView, AssetDetail, AssetSummary, CollectionView, MatchSuggestion, MonitorView,
-    PublicationView, ReviewView, TagCount, VariantView,
+    PublicationView, ReviewView, RuleActivityView, TagCount, VariantView,
 };
 use shorts_desktop::{
     AppError, AssetUpdate, EditPublication, ImportOutcome, LibraryQuery, NewPublication,
@@ -347,6 +347,25 @@ pub async fn update_rule(
 #[tauri::command]
 pub async fn delete_rule(shell: State<'_, Shell>, id: RuleId) -> Result<CollectionView> {
     shell.app.delete_rule(id).await
+}
+
+#[tauri::command]
+pub async fn rule_activity(shell: State<'_, Shell>, id: RuleId) -> Result<RuleActivityView> {
+    shell.app.rule_activity(id).await
+}
+
+/// Lists the watch folder now ("Check now"); returns the updated preferences.
+#[tauri::command]
+pub async fn check_watch_folder(shell: State<'_, Shell>) -> Result<Preferences> {
+    let check = shell
+        .watch
+        .lock()
+        .expect("watch lock")
+        .as_ref()
+        .map(|w| w.check_now())
+        .ok_or_else(|| AppError::Invalid("no watch folder is set".into()))?;
+    check.await?;
+    shell.app.preferences().await
 }
 
 #[tauri::command]

@@ -626,3 +626,21 @@ td.actions {
   border-color: var(--warn);
   margin-top: 1rem;
 }
+
+.rule-summary {
+  flex-basis: 100%;
+  margin: 0.2rem 0;
+  padding: 0.4rem 0.6rem;
+  border-left: 3px solid var(--info);
+  background: color-mix(in srgb, var(--info) 8%, transparent);
+}
+
+table.activity {
+  flex-basis: 100%;
+  margin-top: 0.4rem;
+}
+
+.caption-preview {
+  max-width: 28rem;
+  white-space: pre-wrap;
+}

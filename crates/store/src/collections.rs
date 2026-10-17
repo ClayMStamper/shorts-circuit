@@ -148,6 +148,22 @@ impl<'a> Collections<'a> {
         rows.iter().map(|r| r.parsed("asset_id")).collect()
     }
 
+    /// When the asset entered the collection, if it is a member.
+    pub async fn member_since(
+        &self,
+        collection: CollectionId,
+        asset: AssetId,
+    ) -> StoreResult<Option<DateTime<Utc>>> {
+        let raw: Option<String> = sqlx::query_scalar(
+            "SELECT added_at FROM collection_members WHERE collection_id = ? AND asset_id = ?",
+        )
+        .bind(collection.to_string())
+        .bind(asset.to_string())
+        .fetch_optional(self.pool)
+        .await?;
+        raw.as_deref().map(crate::codec::parse_ts).transpose()
+    }
+
     /// The collections an asset belongs to, by name.
     pub async fn of_asset(&self, asset: AssetId) -> StoreResult<Vec<Collection>> {
         sqlx::query(
@@ -167,12 +183,13 @@ impl<'a> Collections<'a> {
 
     pub async fn insert_rule(&self, rule: &CollectionRule) -> StoreResult<()> {
         sqlx::query(
-            "INSERT INTO collection_rules (id, collection_id, spec, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO collection_rules (id, collection_id, spec, effective_from, created_at, \
+             updated_at) VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(rule.id.to_string())
         .bind(rule.collection_id.to_string())
         .bind(json(&rule.spec))
+        .bind(ts(rule.effective_from))
         .bind(ts(rule.created_at))
         .bind(ts(rule.updated_at))
         .execute(self.pool)
@@ -181,13 +198,15 @@ impl<'a> Collections<'a> {
     }
 
     pub async fn update_rule(&self, rule: &CollectionRule) -> StoreResult<()> {
-        let result =
-            sqlx::query("UPDATE collection_rules SET spec = ?, updated_at = ? WHERE id = ?")
-                .bind(json(&rule.spec))
-                .bind(ts(rule.updated_at))
-                .bind(rule.id.to_string())
-                .execute(self.pool)
-                .await?;
+        let result = sqlx::query(
+            "UPDATE collection_rules SET spec = ?, effective_from = ?, updated_at = ? WHERE id = ?",
+        )
+        .bind(json(&rule.spec))
+        .bind(ts(rule.effective_from))
+        .bind(ts(rule.updated_at))
+        .bind(rule.id.to_string())
+        .execute(self.pool)
+        .await?;
         if result.rows_affected() == 0 {
             return Err(StoreError::not_found("rule", rule.id));
         }
@@ -207,7 +226,7 @@ impl<'a> Collections<'a> {
 
     pub async fn rule(&self, id: RuleId) -> StoreResult<Option<CollectionRule>> {
         sqlx::query(
-            "SELECT id, collection_id, spec, created_at, updated_at FROM collection_rules \
+            "SELECT id, collection_id, spec, effective_from, created_at, updated_at FROM collection_rules \
              WHERE id = ?",
         )
         .bind(id.to_string())
@@ -227,7 +246,7 @@ impl<'a> Collections<'a> {
     /// Oldest first, which is the order they fire in.
     pub async fn rules(&self, collection: CollectionId) -> StoreResult<Vec<CollectionRule>> {
         sqlx::query(
-            "SELECT id, collection_id, spec, created_at, updated_at FROM collection_rules \
+            "SELECT id, collection_id, spec, effective_from, created_at, updated_at FROM collection_rules \
              WHERE collection_id = ? ORDER BY created_at, id",
         )
         .bind(collection.to_string())
@@ -329,6 +348,19 @@ impl<'a> Collections<'a> {
         .collect()
     }
 
+    /// Everything a rule created, newest first.
+    pub async fn firings_for_rule(&self, rule: RuleId) -> StoreResult<Vec<RuleFiring>> {
+        sqlx::query(&format!(
+            "SELECT {FIRING_COLUMNS} FROM rule_firings WHERE rule_id = ? ORDER BY fired_at DESC"
+        ))
+        .bind(rule.to_string())
+        .fetch_all(self.pool)
+        .await?
+        .iter()
+        .map(decode_firing)
+        .collect()
+    }
+
     pub async fn firing_for_publication(
         &self,
         id: PublicationId,
@@ -423,6 +455,7 @@ fn decode_rule(row: &SqliteRow) -> StoreResult<CollectionRule> {
         id: row.parsed("id")?,
         collection_id: row.parsed("collection_id")?,
         spec: row.json("spec")?,
+        effective_from: row.time("effective_from")?,
         created_at: row.time("created_at")?,
         updated_at: row.time("updated_at")?,
     })

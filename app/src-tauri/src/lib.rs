@@ -34,7 +34,7 @@ pub struct Shell {
     pub media: MediaStatus,
     /// Optional TikTok new-post detection; unavailable unless `SHORTS_BROKER_URL` is set.
     pub tiktok: Arc<TikTokIntake>,
-    watch: Mutex<Option<WatchFolder>>,
+    pub(crate) watch: Mutex<Option<WatchFolder>>,
     shutdown: CancellationToken,
 }
 
@@ -207,6 +207,8 @@ pub fn run() {
             commands::update_rule,
             commands::delete_rule,
             commands::set_unattended,
+            commands::rule_activity,
+            commands::check_watch_folder,
             commands::tiktok_status,
             commands::tiktok_set_enabled,
             commands::tiktok_connect,

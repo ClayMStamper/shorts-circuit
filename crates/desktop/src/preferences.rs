@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shorts_domain::{CollectionId, OverduePolicy, TimeZoneName};
 use shorts_scheduler::{PostingPlan, PostingSlot};
@@ -11,6 +12,7 @@ const WATCH_FOLDER: &str = "watch_folder";
 const EXPORT_DIR: &str = "export_dir";
 const POSTING_SLOTS: &str = "posting_slots";
 const WATCH_COLLECTION: &str = "watch_collection";
+const WATCH_CHECKED: &str = "watch_checked_at";
 
 /// User preferences. The posting slots are interpreted in `timezone`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,6 +25,8 @@ pub struct Preferences {
     pub posting_slots: Vec<PostingSlot>,
     /// Watch-folder imports are added to this collection (and its rules run).
     pub watch_collection: Option<CollectionId>,
+    /// When the watch folder was last listed (read-only).
+    pub watch_checked_at: Option<DateTime<Utc>>,
 }
 
 impl Preferences {
@@ -72,7 +76,15 @@ impl App {
             export_dir: settings.get(EXPORT_DIR).await?.flatten(),
             posting_slots: settings.get(POSTING_SLOTS).await?.unwrap_or_default(),
             watch_collection: settings.get(WATCH_COLLECTION).await?.flatten(),
+            watch_checked_at: settings.get(WATCH_CHECKED).await?,
         })
+    }
+
+    pub(crate) async fn record_watch_check(&self) {
+        if let Err(e) = self.store.settings().set(WATCH_CHECKED, &self.now()).await {
+            tracing::warn!(error = %e, "could not record the watch folder check");
+        }
+        self.emit(crate::events::AppEvent::WatchFolderChecked);
     }
 
     pub(crate) async fn clear_watch_collection(&self) -> AppResult<()> {

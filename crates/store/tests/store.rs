@@ -904,10 +904,19 @@ async fn collections_hold_members_rules_and_grants() {
             hashtags: vec![],
             include_asset_tags: false,
         },
+        None,
         t0(),
     )
     .unwrap();
     store.collections().insert_rule(&rule).await.unwrap();
+    assert_eq!(
+        store
+            .collections()
+            .member_since(c.id, f.asset.id)
+            .await
+            .unwrap(),
+        Some(t0())
+    );
     assert_eq!(
         store.collections().rules(c.id).await.unwrap(),
         vec![rule.clone()]

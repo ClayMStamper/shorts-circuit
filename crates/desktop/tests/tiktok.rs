@@ -338,9 +338,11 @@ async fn arriving_files_are_suggested_and_merged_only_when_confirmed() {
                 enabled: true,
                 destinations: vec![account],
                 output: RuleOutput::AwaitingApproval,
-                caption_template: "{notes}".into(),
+                caption_template: "{caption}".into(),
                 hashtags: vec![],
                 include_asset_tags: false,
+                // The post went up yesterday; a rule starting now would ignore it.
+                effective_from: Some(support::t0() - Duration::days(2)),
             },
         )
         .await
