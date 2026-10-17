@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use shorts_adapters::AdapterRegistry;
 use shorts_desktop::instagram::{InstagramConnector, InstagramSetup};
 use shorts_desktop::linkedin::{LinkedInConnector, LinkedInSetup};
+use shorts_desktop::snapchat::{SnapSetup, SnapchatConnector};
 use shorts_desktop::tiktok::{TikTokIntake, TikTokSetup};
 use shorts_desktop::watch::{WatchConfig, WatchFolder};
 use shorts_desktop::youtube::{YouTubeConnector, YouTubeSetup};
@@ -43,6 +44,9 @@ pub struct Shell {
     pub instagram: Arc<InstagramConnector>,
     /// LinkedIn Company Page posts; pages are connected in Settings with a pasted token.
     pub linkedin: Arc<LinkedInConnector>,
+    /// Snapchat Spotlight posts; profiles are connected in Settings with the owner's Snap OAuth
+    /// app (loopback sign-in or a pasted code).
+    pub snapchat: Arc<SnapchatConnector>,
     pub(crate) watch: Mutex<Option<WatchFolder>>,
     shutdown: CancellationToken,
 }
@@ -134,6 +138,11 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
         LinkedInSetup::from_env(),
         Arc::new(keyring_store::KeyringCredentials),
     );
+    let snapchat = SnapchatConnector::new(
+        app.clone(),
+        SnapSetup::from_env(),
+        Arc::new(keyring_store::KeyringCredentials),
+    );
     let shutdown = CancellationToken::new();
     app.start_worker(WorkerConfig::default(), shutdown.clone())
         .await?;
@@ -151,6 +160,7 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
         youtube,
         instagram,
         linkedin,
+        snapchat,
         watch: Mutex::new(None),
         shutdown,
     })
@@ -258,6 +268,15 @@ pub fn run() {
             commands::linkedin_find_pages,
             commands::linkedin_connect,
             commands::linkedin_disconnect,
+            commands::snapchat_status,
+            commands::snapchat_set_client,
+            commands::snapchat_clear_client,
+            commands::snapchat_connect,
+            commands::snapchat_connect_progress,
+            commands::snapchat_cancel_connect,
+            commands::snapchat_finish_with_code,
+            commands::snapchat_check_connection,
+            commands::snapchat_disconnect,
             commands::open_link,
             commands::match_suggestions,
             commands::confirm_match,
