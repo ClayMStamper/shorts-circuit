@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use shorts_desktop::instagram::InstagramStatus;
 use shorts_desktop::tiktok::{CheckReport, ConnectProgress, TikTokStatus};
 use shorts_desktop::views::{
     AccountView, AssetDetail, AssetSummary, CollectionView, MatchSuggestion, MonitorView,
@@ -479,6 +480,31 @@ pub async fn youtube_set_public_uploads(
     public: bool,
 ) -> Result<YouTubeStatus> {
     shell.youtube.set_public_uploads(account_id, public).await
+}
+
+#[tauri::command]
+pub async fn instagram_status(shell: State<'_, Shell>) -> Result<InstagramStatus> {
+    shell.instagram.status().await
+}
+
+/// Connects the Instagram account a pasted long-lived token belongs to. The token goes to the
+/// OS credential store and is never sent back to the webview.
+#[tauri::command]
+pub async fn instagram_connect(
+    shell: State<'_, Shell>,
+    access_token: String,
+    account_id: Option<AccountId>,
+) -> Result<InstagramStatus> {
+    shell.instagram.connect(&access_token, account_id).await?;
+    shell.instagram.status().await
+}
+
+#[tauri::command]
+pub async fn instagram_disconnect(
+    shell: State<'_, Shell>,
+    account_id: AccountId,
+) -> Result<InstagramStatus> {
+    shell.instagram.disconnect(account_id).await
 }
 
 /// Opens a published post (an https link the app recorded) in the default browser.

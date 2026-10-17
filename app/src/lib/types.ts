@@ -410,6 +410,7 @@ export type AppEvent =
   | { type: "rulesFailed"; assetId: string; message: string }
   | { type: "tikTokChanged" }
   | { type: "youTubeChanged" }
+  | { type: "instagramChanged" }
   | { type: "watchFolderChecked" }
   | { type: "matchSuggested"; assetId: string | null };
 
@@ -524,6 +525,24 @@ export interface YouTubeStatus {
   connecting: boolean;
   channels: YouTubeChannel[];
   quota: QuotaReport;
+}
+
+export interface InstagramAccount {
+  accountId: string;
+  displayName: string;
+  connected: boolean;
+  needsReconnect: boolean;
+  lastError: string | null;
+  notes: string[];
+  connectedAt: string | null;
+  tokenExpiresAt: string | null;
+  renewedAt: string | null;
+}
+
+export interface InstagramStatus {
+  accounts: InstagramAccount[];
+  /** What to do first, while no account is connected. */
+  nextStep: string | null;
 }
 
 export type YouTubeConnectProgress =

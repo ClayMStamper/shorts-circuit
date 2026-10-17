@@ -12,6 +12,7 @@ import type {
   ConnectProgress,
   EditPublication,
   ImportResult,
+  InstagramStatus,
   LibraryQuery,
   MatchSuggestion,
   MediaStatus,
@@ -142,6 +143,12 @@ export const api = {
   youtubeDisconnect: (accountId: string) => call<YouTubeStatus>("youtube_disconnect", { accountId }),
   youtubeSetPublicUploads: (accountId: string, isPublic: boolean) =>
     call<YouTubeStatus>("youtube_set_public_uploads", { accountId, public: isPublic }),
+
+  // Instagram publishing
+  instagramStatus: () => call<InstagramStatus>("instagram_status"),
+  instagramConnect: (accessToken: string, accountId: string | null) =>
+    call<InstagramStatus>("instagram_connect", { accessToken, accountId }),
+  instagramDisconnect: (accountId: string) => call<InstagramStatus>("instagram_disconnect", { accountId }),
   openLink: (url: string) => call<void>("open_link", { url }),
 
   // Monitor

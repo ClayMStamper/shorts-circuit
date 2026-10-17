@@ -16,6 +16,7 @@
   } from "../lib/types";
   import { errorToast, toast } from "./Toasts.svelte";
   import TikTokSettings from "./TikTokSettings.svelte";
+  import InstagramSettings from "./InstagramSettings.svelte";
   import YouTubeSettings from "./YouTubeSettings.svelte";
 
   let { revision = 0 }: { revision?: number } = $props();
@@ -204,6 +205,8 @@
 
     <YouTubeSettings {revision} onChanged={async () => (accounts = await api.listAccounts())} />
 
+    <InstagramSettings {revision} onChanged={async () => (accounts = await api.listAccounts())} />
+
     <TikTokSettings {revision} />
 
     <fieldset>
@@ -230,7 +233,7 @@
         <button type="submit">Add account</button>
       </form>
       <p class="muted">
-        Connect YouTube channels above to upload automatically. Other accounts publish through export packages: a folder
+        Connect YouTube channels and Instagram accounts above to publish automatically. Other accounts publish through export packages: a folder
         with the rendered video, caption and step-by-step posting instructions.
       </p>
     </fieldset>

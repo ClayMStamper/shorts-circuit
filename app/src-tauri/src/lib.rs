@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use shorts_adapters::AdapterRegistry;
+use shorts_desktop::instagram::{InstagramConnector, InstagramSetup};
 use shorts_desktop::tiktok::{TikTokIntake, TikTokSetup};
 use shorts_desktop::watch::{WatchConfig, WatchFolder};
 use shorts_desktop::youtube::{YouTubeConnector, YouTubeSetup};
@@ -37,6 +38,8 @@ pub struct Shell {
     pub tiktok: Arc<TikTokIntake>,
     /// YouTube Shorts publishing; channels are connected in Settings.
     pub youtube: Arc<YouTubeConnector>,
+    /// Instagram Reels publishing; accounts are connected in Settings with a pasted token.
+    pub instagram: Arc<InstagramConnector>,
     pub(crate) watch: Mutex<Option<WatchFolder>>,
     shutdown: CancellationToken,
 }
@@ -118,6 +121,11 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
         YouTubeSetup::from_env(),
         Arc::new(keyring_store::KeyringCredentials),
     );
+    let instagram = InstagramConnector::new(
+        app.clone(),
+        InstagramSetup::from_env(),
+        Arc::new(keyring_store::KeyringCredentials),
+    );
     let shutdown = CancellationToken::new();
     app.start_worker(WorkerConfig::default(), shutdown.clone())
         .await?;
@@ -127,11 +135,13 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
         Arc::new(keyring_store::KeyringCredentials),
     );
     tauri::async_runtime::spawn(tiktok.clone().run(shutdown.clone()));
+    tauri::async_runtime::spawn(instagram.clone().run(shutdown.clone()));
     Ok(Shell {
         app,
         media,
         tiktok,
         youtube,
+        instagram,
         watch: Mutex::new(None),
         shutdown,
     })
@@ -232,6 +242,9 @@ pub fn run() {
             commands::youtube_cancel_connect,
             commands::youtube_disconnect,
             commands::youtube_set_public_uploads,
+            commands::instagram_status,
+            commands::instagram_connect,
+            commands::instagram_disconnect,
             commands::open_link,
             commands::match_suggestions,
             commands::confirm_match,
