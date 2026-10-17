@@ -291,6 +291,38 @@ publish are separate operations so interrupted work resumes at the correct step.
   between 0.01:1 and 10:1, caption ≤ 2,200 characters, ≤ 30 hashtags and ≤ 20 @mentions. The
   Graph API version defaults to `v24.0` (`SHORTS_INSTAGRAM_API_VERSION` overrides it).
 
+### LinkedIn Company Page connector (Increment 3, third slice)
+
+- **Sign-in.** The owner pastes an access token generated with the LinkedIn developer portal's
+  token generator for their app (which has the Community Management API), with
+  `w_organization_social`, `r_organization_social` and `rw_organization_admin`, and picks the
+  page: the app lists the pages the token's member administers (`organizationAcls`,
+  role `ADMINISTRATOR`), or takes the page's numeric id / admin address when listing isn't
+  allowed. No redirect, hosting or client secret is needed. The token and the page URN live in
+  the OS credential store (`linkedin:<account id>`).
+- **Expiry.** Tokens last 60 days and programmatic refresh is limited to some partner programs,
+  so the app shows a warning in the last week and moves publications to `NeedsAuthentication`
+  once the token has run out or is refused; pasting a new token reconnects the page and
+  resumes them.
+- **Upload.** `POST /rest/videos?action=initializeUpload` (owner = the page) returns the video
+  URN and one pre-signed address per part; each upload step `PUT`s one part and keeps its
+  ETag, and the last calls `finalizeUpload` with the ETags. The checkpoint holds the parts and
+  ETags, so a restart resumes at the next part; a part address LinkedIn refuses (expired)
+  starts a new upload.
+- **Processing and publish.** `GET /rest/videos/{urn}` until `AVAILABLE`
+  (`PROCESSING_FAILED` fails the attempt). The post is `POST /rest/posts` authored by the page,
+  `visibility: PUBLIC`, `feedDistribution: MAIN_FEED`, the video as `content.media` with a
+  title from the first caption line, and the caption as "little text" commentary (reserved
+  characters escaped, hashtags as `{hashtag|\#|name}`). The post URN comes from `x-restli-id`;
+  the link is `linkedin.com/feed/update/<urn>/`. Reconcile lists the page's recent posts
+  (`q=author`) and looks for the uploaded video; if the posts can't be read, the user decides.
+- **Errors.** 401 and 403 ask for a reconnect (403 names the scopes), 429 waits until midnight
+  UTC (or `Retry-After`), 426 says the API version is retired (`SHORTS_LINKEDIN_API_VERSION`,
+  default `202609`), 5xx retries.
+- **Limits** (`shorts_domain::linkedin`): MP4, 3 s to 30 min, 75 KB to 500 MB, commentary ≤ 3,000
+  characters after escaping. Metrics aren't collected yet (they need the organization share
+  statistics API).
+
 ## Delivery plan
 
 | Increment | Reviewable outcome |

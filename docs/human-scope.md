@@ -166,6 +166,45 @@ public.
 7. Record the container id, the media id and anything surprising (error codes, how long
    processing took) in the PR or an issue.
 
+### LinkedIn Company Page (third publishing connector)
+
+The app posts videos as your Company Page. LinkedIn's Community Management API is the gate:
+you apply for it once, and LinkedIn decides (expect days to weeks). Until it is approved the
+page keeps using export packages. What you do:
+
+1. **Developer app.** At linkedin.com/developers → Create app. Name it, link it to your
+   Company Page (a page admin must verify the link from the page's admin view), add a logo and
+   the privacy policy URL.
+2. **Community Management API.** In the app → Products → request **Community Management API**.
+   LinkedIn requires it to be the only product on that app, so use a dedicated app. Fill in
+   the access form (use case: publishing your own organization's videos). Wait for approval.
+3. **Generate a token.** Once approved: app → Auth → OAuth 2.0 tools → **Create token** (the
+   token generator). Choose `w_organization_social`, `r_organization_social` and
+   `rw_organization_admin`, sign in with the LinkedIn member who administers the page, allow,
+   and copy the access token. It lasts 60 days.
+4. **Connect the page.** Settings → LinkedIn page posts → paste the token → **Find my pages**
+   → choose the page (or enter its id: the number in `linkedin.com/company/<id>/admin`) →
+   Connect. The token goes to Windows Credential Manager (`linkedin:<account id>`).
+5. **Every 60 days.** The app warns a week before the token runs out; generate a new one
+   (step 3) and use **Reconnect**. If it does run out, waiting publications pause until you
+   reconnect, then continue.
+
+Confirm the product, scope and portal names when you do this; LinkedIn changes them.
+
+### LinkedIn smoke test (Windows)
+
+LinkedIn posts are public on your page, so post something you're happy to keep (or delete it
+afterwards on LinkedIn).
+
+1. Do the LinkedIn steps above; Settings shows the page as *connected*.
+2. Collections → New collection "LinkedIn MVP" → rule with the page as destination,
+   publications *submitted for my approval*; route the watch folder into it.
+3. Drop a short MP4 (at least 75 KB and 3 seconds) into the watch folder, review and
+   **Approve** it with the time set to now.
+4. Watch the Monitor: *Uploading* → *LinkedIn is processing the video* → *Published* with a
+   link to the post. Check the caption, hashtags and video title on LinkedIn.
+5. Record the video URN, post URN and anything surprising in the PR or an issue.
+
 ## Watch folder
 
 Pick a folder your phone or editor syncs finished videos into (e.g. a OneDrive, Google Drive,
@@ -204,7 +243,9 @@ Prefer the original export over a video saved back from TikTok, which carries a 
 - Switching a YouTube channel to public uploads once the Google Cloud project passes the API
   audit.
 - Re-authentication: Google refresh tokens expire after 7 days while the consent screen is in
-  Testing (the app asks with a Reconnect button; see YouTube above); LinkedIn access tokens last ~60 days and programmatic refresh is partner-only.
+  Testing (the app asks with a Reconnect button; see YouTube above); LinkedIn access tokens last
+  60 days and programmatic refresh is partner-only, so paste a new token every two months (the
+  app warns a week ahead).
 - Meta annual data-use checkup; periodic YouTube re-audits.
 - Getting original videos into the watch folder (phone or editor sync), and confirming the
   suggested match when a detected TikTok post and an arriving file belong together.
