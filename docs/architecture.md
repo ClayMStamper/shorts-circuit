@@ -323,6 +323,83 @@ publish are separate operations so interrupted work resumes at the correct step.
   characters after escaping. Metrics aren't collected yet (they need the organization share
   statistics API).
 
+### Cloud runner (Increment 4, first slice)
+
+Optional. With no runner configured (the default) the desktop behaves exactly as before: every
+publication is desktop-owned and nothing talks to a server.
+
+- **Crates.** `shorts-runner` is a new crate (library plus the `shorts-runner` binary) rather
+  than a mode of `shorts-backend`: the broker is public-facing, stateless and holds only OAuth
+  client secrets, while the runner holds per-account credentials, media and PostgreSQL, and the
+  owner may host either without the other. Shared pieces move out of the desktop:
+  `shorts-publish` holds the publish stage machine (prepare → upload → process → publish →
+  reconcile, the checkpoint and the never-re-publish rule) behind a `PublishHost` trait that the
+  desktop (SQLite, renders, export packages) and the runner (PostgreSQL, uploaded media)
+  implement; `shorts-scheduler`'s `Worker` drives a `JobQueue` trait, implemented for the SQLite
+  store and the runner's PostgreSQL store; `shorts-cloud` holds the sync protocol types and the
+  HTTPS client the desktop (and the runner's tests) use.
+- **Execution owner.** Each publication carries `owner` (`desktop` or `cloud`) and, while the
+  cloud owns it, a `handover` id. Ownership only changes through domain events:
+  `HandOver { to: Cloud, handover }` is allowed from `Scheduled` with a valid approval;
+  `HandOver { to: Desktop }` from any state that isn't active. Starting execution
+  (`BeginPreparing`, `Resume`) names the executor and is refused unless it is the owner, and
+  user events (edit, approve, reschedule, cancel, retry, resolve…) are refused while the cloud
+  owns the publication. The desktop shows the runner's progress through `Mirror { report }`,
+  accepted only while the cloud owns it under the same handover and revision.
+- **No double execution.** The desktop hands over in one SQLite `BEGIN IMMEDIATE`
+  transaction: it applies `HandOver`, and cancels the queued publish job, refusing if that job
+  is running or its checkpoint shows the upload already reached the platform. The desktop's
+  claim query skips cloud-owned publications, and the publish handler re-checks the owner, so a
+  queued job that slipped through abandons. On the runner, claiming takes the job row with
+  `FOR UPDATE SKIP LOCKED` and requires `owner = cloud`; releasing locks the same row, so a
+  claim and a release can't both win. Release (taking it back) is refused while the runner's
+  job is running, the publication is active, or a `RetryScheduled` / `NeedsAuthentication`
+  attempt already reached the platform (the runner finishes those itself, after a reconnect if
+  needed); `OutcomeUnknown`, `NeedsUserAction`, `Failed`, `Published` and untouched `Scheduled`
+  publications can come back. Only then does the desktop mirror the final report and apply
+  `HandOver { to: Desktop }`.
+- **Sync protocol** (HTTPS, `Authorization: Bearer <installation token>`; the desktop refuses
+  plain `http://` except to a loopback address). All writes are idempotent:
+  - `POST /v1/uploads {sha256, size}`, `PUT /v1/uploads/{sha256}?offset=N` (chunks up to
+    8 MiB), `GET /v1/uploads/{sha256}`: content-addressed, resumable media upload. A wrong
+    offset answers `409` with the server's offset; the last chunk is verified against the
+    SHA-256 before the file counts as received.
+  - `PUT /v1/accounts/{id} {account, credential, base_revision}`: the account record and its
+    credential. Credentials have a revision; if the runner rotated the credential since
+    `base_revision` (Snap and sometimes Google rotate refresh tokens) it answers `409` and the
+    desktop first pulls `GET /v1/accounts/{id}/credential` into its OS credential store. A new
+    credential resumes the runner's `NeedsAuthentication` publications for that account.
+  - `PUT /v1/publications/{id} {handover, publication, media, overdue}`: the approved,
+    immutable revision. Same handover → same answer; a different revision under a live
+    handover → `409`; a handover the desktop already took back → `410`.
+  - `GET /v1/publications` / `GET /v1/publications/{id}`: owner reports (state, revision,
+    retry time, error, user action, published URL, whether the attempt reached the platform).
+    The desktop polls every 30 s while cloud mode is on, mirrors reports, and re-delivers any
+    cloud-owned publication the runner doesn't list (so a lost delivery heals itself).
+  - `POST /v1/publications/{id}/release {handover}`: take back; `409` with the reason while in
+    flight, else the final report.
+- **Runner storage.** PostgreSQL through `sqlx` migrations: installations (token SHA-256
+  only), accounts, encrypted credentials, publications (the domain record as JSONB with
+  queryable state/owner/version columns, optimistic concurrency), immutable revisions, events,
+  jobs (same lease columns as SQLite), attempts, uploads and YouTube quota. Instants are
+  `timestamptz` (UTC). Media lives on disk under the data directory, named by SHA-256, and is
+  deleted once its publications are published or taken back.
+- **Credentials at rest.** Envelope encryption: each credential write gets a fresh 256-bit data
+  key; the JSON is sealed with AES-256-GCM under it (bound to the account id), and the data key
+  is wrapped with AES-256-GCM under the master key from `SHORTS_RUNNER_MASTER_KEY` (base64, 32
+  bytes; never stored, never logged). `SHORTS_RUNNER_OLD_MASTER_KEYS` keeps retired keys
+  readable while `shorts-runner rotate-keys` re-wraps every data key under the current one.
+  Secrets are only decrypted to build adapter sessions; token types redact themselves in
+  `Debug`.
+- **Tokens.** The runner refreshes as the desktop connectors do, with the same adapter
+  clients: Google and Snap access tokens from refresh tokens (storing rotated refresh tokens),
+  Instagram renewal when under 20 days are left (on use and every 6 hours), LinkedIn tokens
+  used until they expire. A refused refresh pauses the publication at `NeedsAuthentication`;
+  reconnecting on the desktop pushes the new credential.
+- **Out of scope here.** Analytics, shared multi-user approvals, native platform scheduling,
+  the broker's TikTok flow in the runner, and multi-runner high availability (one runner
+  process per database is assumed; leases make a second one safe but not useful).
+
 ## Delivery plan
 
 | Increment | Reviewable outcome |
