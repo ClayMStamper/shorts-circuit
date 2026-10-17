@@ -4,7 +4,9 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use shorts_adapters::linkedin::Organization;
 use shorts_desktop::instagram::InstagramStatus;
+use shorts_desktop::linkedin::LinkedInStatus;
 use shorts_desktop::tiktok::{CheckReport, ConnectProgress, TikTokStatus};
 use shorts_desktop::views::{
     AccountView, AssetDetail, AssetSummary, CollectionView, MatchSuggestion, MonitorView,
@@ -505,6 +507,44 @@ pub async fn instagram_disconnect(
     account_id: AccountId,
 ) -> Result<InstagramStatus> {
     shell.instagram.disconnect(account_id).await
+}
+
+#[tauri::command]
+pub async fn linkedin_status(shell: State<'_, Shell>) -> Result<LinkedInStatus> {
+    shell.linkedin.status().await
+}
+
+/// The Company Pages a pasted token administers. The token is not stored by this call.
+#[tauri::command]
+pub async fn linkedin_find_pages(
+    shell: State<'_, Shell>,
+    access_token: String,
+) -> Result<Vec<Organization>> {
+    shell.linkedin.find_pages(&access_token).await
+}
+
+/// Connects a Company Page with a pasted token. The token goes to the OS credential store and
+/// is never sent back to the webview.
+#[tauri::command]
+pub async fn linkedin_connect(
+    shell: State<'_, Shell>,
+    access_token: String,
+    page: String,
+    account_id: Option<AccountId>,
+) -> Result<LinkedInStatus> {
+    shell
+        .linkedin
+        .connect(&access_token, &page, account_id)
+        .await?;
+    shell.linkedin.status().await
+}
+
+#[tauri::command]
+pub async fn linkedin_disconnect(
+    shell: State<'_, Shell>,
+    account_id: AccountId,
+) -> Result<LinkedInStatus> {
+    shell.linkedin.disconnect(account_id).await
 }
 
 /// Opens a published post (an https link the app recorded) in the default browser.

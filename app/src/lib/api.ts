@@ -13,6 +13,8 @@ import type {
   EditPublication,
   ImportResult,
   InstagramStatus,
+  LinkedInOrganization,
+  LinkedInStatus,
   LibraryQuery,
   MatchSuggestion,
   MediaStatus,
@@ -149,6 +151,13 @@ export const api = {
   instagramConnect: (accessToken: string, accountId: string | null) =>
     call<InstagramStatus>("instagram_connect", { accessToken, accountId }),
   instagramDisconnect: (accountId: string) => call<InstagramStatus>("instagram_disconnect", { accountId }),
+
+  // LinkedIn publishing
+  linkedinStatus: () => call<LinkedInStatus>("linkedin_status"),
+  linkedinFindPages: (accessToken: string) => call<LinkedInOrganization[]>("linkedin_find_pages", { accessToken }),
+  linkedinConnect: (accessToken: string, page: string, accountId: string | null) =>
+    call<LinkedInStatus>("linkedin_connect", { accessToken, page, accountId }),
+  linkedinDisconnect: (accountId: string) => call<LinkedInStatus>("linkedin_disconnect", { accountId }),
   openLink: (url: string) => call<void>("open_link", { url }),
 
   // Monitor

@@ -411,6 +411,7 @@ export type AppEvent =
   | { type: "tikTokChanged" }
   | { type: "youTubeChanged" }
   | { type: "instagramChanged" }
+  | { type: "linkedInChanged" }
   | { type: "watchFolderChecked" }
   | { type: "matchSuggested"; assetId: string | null };
 
@@ -543,6 +544,30 @@ export interface InstagramStatus {
   accounts: InstagramAccount[];
   /** What to do first, while no account is connected. */
   nextStep: string | null;
+}
+
+export interface LinkedInPage {
+  accountId: string;
+  displayName: string;
+  connected: boolean;
+  needsReconnect: boolean;
+  /** Less than a week left on the token. */
+  expiresSoon: boolean;
+  lastError: string | null;
+  notes: string[];
+  connectedAt: string | null;
+  tokenExpiresAt: string | null;
+}
+
+export interface LinkedInStatus {
+  pages: LinkedInPage[];
+  nextStep: string | null;
+}
+
+/** A Company Page a pasted token administers. */
+export interface LinkedInOrganization {
+  urn: string;
+  name: string;
 }
 
 export type YouTubeConnectProgress =

@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use shorts_adapters::AdapterRegistry;
 use shorts_desktop::instagram::{InstagramConnector, InstagramSetup};
+use shorts_desktop::linkedin::{LinkedInConnector, LinkedInSetup};
 use shorts_desktop::tiktok::{TikTokIntake, TikTokSetup};
 use shorts_desktop::watch::{WatchConfig, WatchFolder};
 use shorts_desktop::youtube::{YouTubeConnector, YouTubeSetup};
@@ -40,6 +41,8 @@ pub struct Shell {
     pub youtube: Arc<YouTubeConnector>,
     /// Instagram Reels publishing; accounts are connected in Settings with a pasted token.
     pub instagram: Arc<InstagramConnector>,
+    /// LinkedIn Company Page posts; pages are connected in Settings with a pasted token.
+    pub linkedin: Arc<LinkedInConnector>,
     pub(crate) watch: Mutex<Option<WatchFolder>>,
     shutdown: CancellationToken,
 }
@@ -126,6 +129,11 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
         InstagramSetup::from_env(),
         Arc::new(keyring_store::KeyringCredentials),
     );
+    let linkedin = LinkedInConnector::new(
+        app.clone(),
+        LinkedInSetup::from_env(),
+        Arc::new(keyring_store::KeyringCredentials),
+    );
     let shutdown = CancellationToken::new();
     app.start_worker(WorkerConfig::default(), shutdown.clone())
         .await?;
@@ -142,6 +150,7 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
         tiktok,
         youtube,
         instagram,
+        linkedin,
         watch: Mutex::new(None),
         shutdown,
     })
@@ -245,6 +254,10 @@ pub fn run() {
             commands::instagram_status,
             commands::instagram_connect,
             commands::instagram_disconnect,
+            commands::linkedin_status,
+            commands::linkedin_find_pages,
+            commands::linkedin_connect,
+            commands::linkedin_disconnect,
             commands::open_link,
             commands::match_suggestions,
             commands::confirm_match,
