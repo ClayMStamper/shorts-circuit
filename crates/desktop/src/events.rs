@@ -39,6 +39,8 @@ pub enum AppEvent {
     InstagramChanged,
     /// A LinkedIn page was connected or disconnected.
     LinkedInChanged,
+    /// A Snapchat profile was connected or disconnected, or a sign-in progressed.
+    SnapchatChanged,
     /// The watch folder was listed (on start, on its timer, or "Check now").
     WatchFolderChecked,
     /// A file might be the original of a pending TikTok post (`asset_id` is the file's asset
