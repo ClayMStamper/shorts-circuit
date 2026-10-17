@@ -17,6 +17,7 @@ pub mod platform;
 pub mod publication;
 pub mod recipe;
 pub mod schedule;
+pub mod snapchat;
 pub mod source;
 pub mod variant;
 pub mod youtube;
