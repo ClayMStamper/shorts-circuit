@@ -2,13 +2,14 @@
 //!
 //! The limits below are meant for early warnings in review; each adapter re-validates against
 //! the provider's current rules. YouTube's come from [`crate::youtube`], checked against
-//! Google's docs in October 2026; the others are as understood in mid-2026 and still need
-//! confirming (see `docs/human-scope.md`).
+//! Google's docs in October 2026, and Instagram's from [`crate::instagram`]; the others are as
+//! understood in mid-2026 and still need confirming (see `docs/human-scope.md`).
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::instagram;
 use crate::media::MediaProperties;
 use crate::youtube;
 
@@ -62,12 +63,12 @@ impl Platform {
                 max_hashtags: youtube::MAX_HASHTAGS,
             },
             Self::InstagramReels => MediaRequirements {
-                min_duration_ms: 3_000,
-                max_duration_ms: 15 * 60_000,
-                max_file_bytes: 300 * 1024 * 1024,
+                min_duration_ms: instagram::MIN_DURATION_MS,
+                max_duration_ms: instagram::MAX_DURATION_MS,
+                max_file_bytes: instagram::MAX_FILE_BYTES,
                 require_vertical_or_square: false,
-                max_caption_chars: 2_200,
-                max_hashtags: 30,
+                max_caption_chars: instagram::CAPTION_MAX_CHARS,
+                max_hashtags: instagram::MAX_HASHTAGS,
             },
             Self::SnapchatSpotlight => MediaRequirements {
                 min_duration_ms: 5_000,
@@ -133,6 +134,11 @@ pub enum ValidationIssue {
         count: usize,
         max: usize,
     },
+    /// More `@name` mentions than the platform allows (Instagram: 20).
+    TooManyMentions {
+        count: usize,
+        max: usize,
+    },
     NotRendered,
     AudioPermissionMissing,
     VideoPermissionMissing,
@@ -188,6 +194,9 @@ impl fmt::Display for ValidationIssue {
             }
             Self::TooManyHashtags { count, max } => {
                 write!(f, "{count} hashtags; the maximum is {max}")
+            }
+            Self::TooManyMentions { count, max } => {
+                write!(f, "{count} @mentions; the maximum is {max}")
             }
             Self::NotRendered => f.write_str("the variant has not been rendered yet"),
             Self::AudioPermissionMissing => {
