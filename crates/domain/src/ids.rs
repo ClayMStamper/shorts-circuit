@@ -79,6 +79,11 @@ id_type!(
     AttemptId
 );
 id_type!(
+    /// Identifies one hand-over of a publication to the cloud runner. Each hand-over gets a
+    /// new one, so a delivery retried after the publication was taken back is recognised.
+    HandoverId
+);
+id_type!(
     /// Identifies a [`Collection`](crate::Collection).
     CollectionId
 );

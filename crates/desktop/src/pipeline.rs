@@ -18,10 +18,10 @@ use shorts_adapters::{
     UploadProgress,
 };
 use shorts_domain::{
-    ActiveStage, Asset, AttemptId, AttemptOutcome, Job, JobKind, MediaFile, MediaProperties,
-    OutcomeResolution, PauseReason, PermissionStatus, Publication, PublicationEvent, PublicationId,
-    PublicationState, PublishAttempt, RenderedOutput, TransitionError, UserAction, Variant,
-    VariantId,
+    ActiveStage, Asset, AttemptId, AttemptOutcome, ExecutionOwner, Job, JobKind, MediaFile,
+    MediaProperties, OutcomeResolution, PauseReason, PermissionStatus, Publication,
+    PublicationEvent, PublicationId, PublicationState, PublishAttempt, RenderedOutput,
+    TransitionError, UserAction, Variant, VariantId,
 };
 use shorts_media::MediaError;
 use shorts_scheduler::{Disposition, JobContext, JobFailure, JobHandler};
@@ -552,11 +552,18 @@ impl JobHandler for PublishHandler {
 
         match p.state() {
             PublicationState::Scheduled => {
-                run.apply(PublicationEvent::BeginPreparing).await?;
+                run.apply(PublicationEvent::BeginPreparing {
+                    by: ExecutionOwner::Desktop,
+                })
+                .await?;
             }
             PublicationState::RetryScheduled => {
                 let at = run.checkpoint.stage.active();
-                run.apply(PublicationEvent::Resume { at }).await?;
+                run.apply(PublicationEvent::Resume {
+                    at,
+                    by: ExecutionOwner::Desktop,
+                })
+                .await?;
             }
             // Recovering an interrupted run.
             s if s.is_active() => {}

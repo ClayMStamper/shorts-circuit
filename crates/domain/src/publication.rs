@@ -7,6 +7,10 @@
 //!
 //! plus `RetryScheduled`, `NeedsAuthentication`, `NeedsUserAction`, `OutcomeUnknown`, `Failed`
 //! and `Cancelled`. Every change goes through [`Publication::apply`].
+//!
+//! Each publication also has an execution owner ([`ExecutionOwner`]): only the owner starts
+//! work on it, the user can't change it while the cloud runner owns it, and ownership moves
+//! only through `HandToCloud` / `ReturnToDesktop` (see [`crate::ownership`]).
 
 use std::fmt;
 
@@ -14,7 +18,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::ids::{AccountId, AssetId, PublicationId, VariantId};
+use crate::ids::{AccountId, AssetId, HandoverId, PublicationId, VariantId};
+use crate::ownership::{self, Execution, ExecutionOwner, InFlight, OwnerReport};
 use crate::platform::Platform;
 use crate::schedule::Schedule;
 
@@ -305,6 +310,8 @@ pub enum PublicationEvent {
     Reschedule {
         schedule: Schedule,
     },
+    /// The account was signed in again. Applied by whichever side owns the publication when
+    /// it gets the new credential, so it isn't refused for cloud-owned publications.
     Reauthenticated,
     ResolveUserAction,
     ConfirmManualPost {
@@ -315,13 +322,34 @@ pub enum PublicationEvent {
     },
     Retry,
     Cancel,
+    // Execution ownership.
+    /// The desktop hands an approved, scheduled publication to the cloud runner.
+    HandToCloud {
+        handover: HandoverId,
+        /// The desktop's publish job, read in the same transaction.
+        execution: Execution,
+    },
+    /// The cloud runner gives the publication back (on the runner), or the desktop takes it
+    /// back after the runner released it (on the desktop).
+    ReturnToDesktop {
+        /// The cloud runner's publish job, read in the same transaction.
+        execution: Execution,
+    },
+    /// On the desktop: the cloud runner reported progress on a publication it owns.
+    Mirror {
+        report: OwnerReport,
+    },
     // Worker events.
-    BeginPreparing,
+    /// `by` is the executor starting the work; it must be the owner.
+    BeginPreparing {
+        by: ExecutionOwner,
+    },
     Advance {
         to: ActiveStage,
     },
     Resume {
         at: ActiveStage,
+        by: ExecutionOwner,
     },
     HandoffReady {
         package_dir: String,
@@ -365,7 +393,10 @@ impl PublicationEvent {
             Self::ResolveOutcome { .. } => "resolve_outcome",
             Self::Retry => "retry",
             Self::Cancel => "cancel",
-            Self::BeginPreparing => "begin_preparing",
+            Self::HandToCloud { .. } => "hand_to_cloud",
+            Self::ReturnToDesktop { .. } => "return_to_desktop",
+            Self::Mirror { .. } => "mirror",
+            Self::BeginPreparing { .. } => "begin_preparing",
             Self::Advance { .. } => "advance",
             Self::Resume { .. } => "resume",
             Self::HandoffReady { .. } => "handoff_ready",
@@ -403,6 +434,19 @@ pub enum TransitionError {
     InvalidHashtag(String),
     #[error("the content is unchanged")]
     Unchanged,
+    /// A user change while the cloud runner owns the publication.
+    #[error("the cloud runner is publishing this; take it back to this computer first")]
+    OwnedByCloud,
+    #[error("{executor} cannot start this publication: {owner} owns it")]
+    NotOwner {
+        executor: ExecutionOwner,
+        owner: ExecutionOwner,
+    },
+    #[error("it can't move between this computer and the cloud runner now: {0}")]
+    InFlight(InFlight),
+    /// A cloud report for another hand-over or revision.
+    #[error("the report is for a different hand-over or revision")]
+    StaleReport,
 }
 
 /// The record of one applied event, for the audit log.
@@ -434,6 +478,12 @@ pub struct PublicationRecord {
     pub user_action: Option<UserAction>,
     pub last_error: Option<String>,
     pub published: Option<PublishedRef>,
+    /// Who executes it. Records stored before cloud mode existed are desktop-owned.
+    #[serde(default)]
+    pub owner: ExecutionOwner,
+    /// Set while the cloud owns it: which hand-over gave it to the cloud.
+    #[serde(default)]
+    pub handover: Option<HandoverId>,
     pub version: u64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -470,6 +520,8 @@ impl Publication {
                 user_action: None,
                 last_error: None,
                 published: None,
+                owner: ExecutionOwner::Desktop,
+                handover: None,
                 version: 0,
                 created_at: now,
                 updated_at: now,
@@ -534,6 +586,53 @@ impl Publication {
         self.record.published.as_ref()
     }
 
+    pub fn owner(&self) -> ExecutionOwner {
+        self.record.owner
+    }
+
+    pub fn handover(&self) -> Option<HandoverId> {
+        self.record.handover
+    }
+
+    /// The cloud runner's status in the form the desktop mirrors.
+    pub fn owner_report(&self, reached_provider: bool) -> Option<OwnerReport> {
+        Some(OwnerReport {
+            publication_id: self.record.id,
+            handover: self.record.handover?,
+            revision: self.record.revision.number,
+            owner: self.record.owner,
+            state: self.record.state,
+            retry_at: self.record.retry_at,
+            last_error: self.record.last_error.clone(),
+            user_action: self.record.user_action.clone(),
+            published: self.record.published.clone(),
+            reached_provider,
+            updated_at: self.record.updated_at,
+        })
+    }
+
+    /// The runner's copy of a publication the desktop handed over. Refused unless the record
+    /// is cloud-owned under a hand-over, scheduled, and approved at its current revision.
+    pub fn received_from_desktop(record: PublicationRecord) -> Result<Self, TransitionError> {
+        let p = Self { record };
+        if p.record.owner != ExecutionOwner::Cloud || p.record.handover.is_none() {
+            return Err(TransitionError::NotOwner {
+                executor: ExecutionOwner::Cloud,
+                owner: p.record.owner,
+            });
+        }
+        if p.record.state != PublicationState::Scheduled || p.record.schedule.is_none() {
+            return Err(TransitionError::NotAllowed {
+                state: p.record.state,
+                event: "hand_to_cloud",
+            });
+        }
+        if !p.has_valid_approval() {
+            return Err(TransitionError::NotApproved);
+        }
+        Ok(p)
+    }
+
     /// Optimistic-concurrency version; incremented by every applied event.
     pub fn version(&self) -> u64 {
         self.record.version
@@ -574,6 +673,23 @@ impl Publication {
         let mut next = self.record.clone();
         let mut new_revision = false;
         let mut approval_dropped = false;
+
+        let user_change = matches!(
+            event,
+            E::SubmitForReview
+                | E::Approve { .. }
+                | E::RevokeApproval
+                | E::Revise { .. }
+                | E::Reschedule { .. }
+                | E::ResolveUserAction
+                | E::ConfirmManualPost { .. }
+                | E::ResolveOutcome { .. }
+                | E::Retry
+                | E::Cancel
+        );
+        if user_change && next.owner == ExecutionOwner::Cloud {
+            return Err(TransitionError::OwnedByCloud);
+        }
 
         match event {
             E::SubmitForReview => {
@@ -684,9 +800,67 @@ impl Publication {
                     };
                 }
             }
-            E::BeginPreparing => {
+            E::HandToCloud {
+                handover,
+                execution,
+            } => {
+                if from != S::Scheduled || next.owner != ExecutionOwner::Desktop {
+                    return Err(not_allowed());
+                }
+                if !self.has_valid_approval() {
+                    return Err(TransitionError::NotApproved);
+                }
+                ownership::check_hand_over(execution).map_err(TransitionError::InFlight)?;
+                next.owner = ExecutionOwner::Cloud;
+                next.handover = Some(handover);
+            }
+            E::ReturnToDesktop { execution } => {
+                if next.owner != ExecutionOwner::Cloud {
+                    return Err(not_allowed());
+                }
+                ownership::check_return(from, execution).map_err(TransitionError::InFlight)?;
+                next.owner = ExecutionOwner::Desktop;
+                next.handover = None;
+            }
+            E::Mirror { report } => {
+                if next.owner != ExecutionOwner::Cloud || from.is_terminal() {
+                    return Err(not_allowed());
+                }
+                if Some(report.handover) != next.handover
+                    || report.publication_id != next.id
+                    || report.revision != next.revision.number
+                {
+                    return Err(TransitionError::StaleReport);
+                }
+                if !OwnerReport::state_is_reportable(report.state) {
+                    return Err(TransitionError::NotAllowed {
+                        state: report.state,
+                        event: name,
+                    });
+                }
+                let unchanged = next.state == report.state
+                    && next.retry_at == report.retry_at
+                    && next.last_error == report.last_error
+                    && next.user_action == report.user_action
+                    && next.published == report.published;
+                if unchanged {
+                    return Err(TransitionError::Unchanged);
+                }
+                next.state = report.state;
+                next.retry_at = report.retry_at;
+                next.last_error = report.last_error;
+                next.user_action = report.user_action;
+                next.published = report.published;
+            }
+            E::BeginPreparing { by } => {
                 if from != S::Scheduled {
                     return Err(not_allowed());
+                }
+                if by != next.owner {
+                    return Err(TransitionError::NotOwner {
+                        executor: by,
+                        owner: next.owner,
+                    });
                 }
                 if !self.has_valid_approval() {
                     return Err(TransitionError::NotApproved);
@@ -701,9 +875,15 @@ impl Publication {
                 }
                 next.state = to.state();
             }
-            E::Resume { at } => {
+            E::Resume { at, by } => {
                 if from != S::RetryScheduled {
                     return Err(not_allowed());
+                }
+                if by != next.owner {
+                    return Err(TransitionError::NotOwner {
+                        executor: by,
+                        owner: next.owner,
+                    });
                 }
                 if !self.has_valid_approval() {
                     return Err(TransitionError::NotApproved);

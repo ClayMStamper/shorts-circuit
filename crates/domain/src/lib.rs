@@ -13,6 +13,7 @@ pub mod instagram;
 pub mod job;
 pub mod linkedin;
 pub mod media;
+pub mod ownership;
 pub mod platform;
 pub mod publication;
 pub mod recipe;
@@ -30,11 +31,12 @@ pub use collection::{
     approval_mode,
 };
 pub use ids::{
-    AccountId, AssetId, AttemptId, CollectionId, JobId, MediaFileId, PublicationId, RuleId,
-    VariantId,
+    AccountId, AssetId, AttemptId, CollectionId, HandoverId, JobId, MediaFileId, PublicationId,
+    RuleId, VariantId,
 };
 pub use job::{Job, JobKind, JobRecord, JobState, Lease, OverduePolicy, PauseReason};
 pub use media::{Checksum, MediaFile, MediaProperties};
+pub use ownership::{Execution, ExecutionOwner, InFlight, OwnerReport};
 pub use platform::{MediaRequirements, Platform, ValidationIssue};
 pub use publication::{
     ActiveStage, Approval, Destination, OutcomeResolution, Publication, PublicationEvent,
