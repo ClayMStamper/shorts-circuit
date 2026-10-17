@@ -7,10 +7,11 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use shorts_domain::{
     Asset, AssetStatus, AttemptOutcome, Checksum, Collection, CollectionRule, ConnectedAccount,
-    Destination, Job, JobKind, JobState, MediaFile, MediaFileId, MediaProperties, OverduePolicy,
-    PermissionStatus, Platform, Publication, PublicationEvent, PublicationState, PublishAttempt,
-    Rating, RenderRecipe, RevisionContent, RuleFiring, RuleId, RuleOutput, RuleSpec, Schedule, Tag,
-    TikTokPost, TimeZoneName, UnattendedGrant, Variant,
+    Destination, ExecutionOwner, HandoverId, InFlight, Job, JobKind, JobState, MediaFile,
+    MediaFileId, MediaProperties, OverduePolicy, PermissionStatus, Platform, Publication,
+    PublicationEvent, PublicationState, PublishAttempt, Rating, RenderRecipe, RevisionContent,
+    RuleFiring, RuleId, RuleOutput, RuleSpec, Schedule, Tag, TikTokPost, TimeZoneName,
+    TransitionError, UnattendedGrant, Variant,
 };
 use shorts_store::{AssetFilter, JobFilter, PublicationFilter, Store, StoreError};
 use tempfile::TempDir;
@@ -1142,4 +1143,161 @@ async fn quota_spend_accumulates_per_bucket_and_day() {
 
     assert_eq!(q.prune_before(next).await.unwrap(), 2);
     assert_eq!(q.used("youtube:units", next).await.unwrap(), 5);
+}
+
+// --- execution ownership --------------------------------------------------------------------
+
+/// An approved publication with its queued publish job, due at `t0`.
+async fn scheduled_with_job(store: &Store, f: &Fixture) -> (Publication, Job) {
+    let mut p = draft(f);
+    store.publications().insert(&p).await.unwrap();
+    for event in [
+        PublicationEvent::SubmitForReview,
+        PublicationEvent::Approve {
+            revision: 1,
+            current_variant_revision: 1,
+            by: "owner".into(),
+        },
+    ] {
+        let t = p.apply(event, t0()).unwrap();
+        store.publications().save(&p, &t).await.unwrap();
+    }
+    let job = job(&p.id().to_string(), t0());
+    store.jobs().insert(&job).await.unwrap();
+    (p, job)
+}
+
+#[tokio::test]
+async fn handing_over_moves_ownership_and_cancels_the_desktop_job() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 21).await;
+    let (p, job) = scheduled_with_job(&store, &f).await;
+
+    let handover = HandoverId::new();
+    let moved = store
+        .hand_over_to_cloud(p.id(), handover, t0(), |_| false)
+        .await
+        .unwrap();
+    assert_eq!(moved.owner(), ExecutionOwner::Cloud);
+    assert_eq!(moved.handover(), Some(handover));
+    let loaded = store.publications().require(p.id()).await.unwrap();
+    assert_eq!(loaded, moved);
+    assert_eq!(
+        store.jobs().require(job.id()).await.unwrap().state(),
+        JobState::Cancelled
+    );
+    let log = store.publications().log(p.id()).await.unwrap();
+    assert_eq!(log.last().unwrap().event, "hand_to_cloud");
+    let cloud = store
+        .publications()
+        .list(&PublicationFilter {
+            owner: Some(ExecutionOwner::Cloud),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(cloud.len(), 1);
+
+    // Even a publish job enqueued afterwards is never claimed on the desktop.
+    store
+        .jobs()
+        .insert(&self::job(&p.id().to_string(), t0()))
+        .await
+        .unwrap();
+    assert!(
+        store
+            .jobs()
+            .claim_next("desktop:w", t0(), Duration::seconds(60), &[])
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn handing_over_is_refused_while_the_desktop_job_runs_or_reached_the_platform() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 22).await;
+    let (p, job) = scheduled_with_job(&store, &f).await;
+
+    let err = store
+        .hand_over_to_cloud(p.id(), HandoverId::new(), t0(), |_| true)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        StoreError::Transition(TransitionError::InFlight(InFlight::ReachedProvider))
+    ));
+
+    let claimed = store
+        .jobs()
+        .claim_next("desktop:w", t0(), Duration::seconds(60), &[])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.id(), job.id());
+    let err = store
+        .hand_over_to_cloud(p.id(), HandoverId::new(), t0(), |_| false)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        StoreError::Transition(TransitionError::InFlight(InFlight::JobRunning))
+    ));
+    let loaded = store.publications().require(p.id()).await.unwrap();
+    assert_eq!(loaded.owner(), ExecutionOwner::Desktop);
+    let still = store.jobs().require(job.id()).await.unwrap();
+    assert_eq!(still.state(), JobState::Running);
+    assert_eq!(still.lease().unwrap().owner, "desktop:w");
+}
+
+/// The desktop worker claiming a job and the user handing its publication to the cloud race;
+/// exactly one wins, every time.
+#[tokio::test]
+async fn claiming_and_handing_over_never_both_win() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 23).await;
+    let (mut claims, mut handovers) = (0, 0);
+    for _ in 0..30 {
+        let (p, _) = scheduled_with_job(&store, &f).await;
+        let id = p.id();
+        let claimer = {
+            let store = store.clone();
+            tokio::spawn(async move {
+                store
+                    .jobs()
+                    .claim_next("desktop:w", t0(), Duration::seconds(60), &[])
+                    .await
+                    .unwrap()
+            })
+        };
+        let mover = {
+            let store = store.clone();
+            tokio::spawn(async move {
+                store
+                    .hand_over_to_cloud(id, HandoverId::new(), t0(), |_| false)
+                    .await
+            })
+        };
+        let claimed = claimer.await.unwrap();
+        let moved = mover.await.unwrap();
+        match (claimed, moved) {
+            (Some(job), Err(StoreError::Transition(TransitionError::InFlight(_)))) => {
+                assert_eq!(job.subject(), p.id().to_string());
+                claims += 1;
+                // Finish it so the next round's claim only sees the new job.
+                store
+                    .jobs()
+                    .modify(job.id(), |j| j.succeed("desktop:w", t0()))
+                    .await
+                    .unwrap();
+            }
+            (None, Ok(moved)) => {
+                assert_eq!(moved.owner(), ExecutionOwner::Cloud);
+                handovers += 1;
+            }
+            (claimed, moved) => panic!("both or neither won: {claimed:?} / {moved:?}"),
+        }
+    }
+    assert_eq!(claims + handovers, 30);
 }
