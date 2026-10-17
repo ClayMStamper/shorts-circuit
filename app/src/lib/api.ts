@@ -30,6 +30,8 @@ import type {
   RuleActivityView,
   RuleInput,
   ScheduleInput,
+  SnapConnectProgress,
+  SnapStatus,
   TagCount,
   TikTokStatus,
   VariantView,
@@ -158,6 +160,19 @@ export const api = {
   linkedinConnect: (accessToken: string, page: string, accountId: string | null) =>
     call<LinkedInStatus>("linkedin_connect", { accessToken, page, accountId }),
   linkedinDisconnect: (accountId: string) => call<LinkedInStatus>("linkedin_disconnect", { accountId }),
+
+  // Snapchat Spotlight publishing
+  snapchatStatus: () => call<SnapStatus>("snapchat_status"),
+  snapchatSetClient: (clientId: string, clientSecret: string, redirectUri: string) =>
+    call<SnapStatus>("snapchat_set_client", { clientId, clientSecret, redirectUri }),
+  snapchatClearClient: () => call<SnapStatus>("snapchat_clear_client"),
+  snapchatConnect: (accountId: string | null) => call<void>("snapchat_connect", { accountId }),
+  snapchatConnectProgress: () => call<SnapConnectProgress>("snapchat_connect_progress"),
+  snapchatCancelConnect: () => call<void>("snapchat_cancel_connect"),
+  snapchatFinishWithCode: (pasted: string) => call<SnapStatus>("snapchat_finish_with_code", { pasted }),
+  snapchatCheckConnection: (accountId: string) => call<SnapStatus>("snapchat_check_connection", { accountId }),
+  snapchatDisconnect: (accountId: string) => call<SnapStatus>("snapchat_disconnect", { accountId }),
+
   openLink: (url: string) => call<void>("open_link", { url }),
 
   // Monitor
