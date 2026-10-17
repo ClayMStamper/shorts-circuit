@@ -119,6 +119,12 @@ pub struct AccountView {
     pub missing_reason: Option<String>,
     pub next_action: Option<NextAction>,
     pub manual_handoff: bool,
+    /// Signed in through a platform API (as opposed to an export-package destination).
+    pub connected: bool,
+    /// Uploads end up private (e.g. an unaudited YouTube API project).
+    pub private_only: bool,
+    /// Plain-language limits: visibility, quota, sign-in lifetime.
+    pub notes: Vec<String>,
 }
 
 impl From<&ConnectedAccount> for AccountView {
@@ -140,6 +146,9 @@ impl From<&ConnectedAccount> for AccountView {
             missing_reason,
             next_action,
             manual_handoff: a.capabilities.manual_handoff,
+            connected: a.credential_ref.is_some(),
+            private_only: a.capabilities.private_only,
+            notes: a.capabilities.notes.clone(),
         }
     }
 }
@@ -161,6 +170,8 @@ pub enum Action {
     ConfirmPosted,
     ResolveOutcome,
     ExportPackage,
+    /// Sign the destination account in again (Settings).
+    Reconnect,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -189,6 +200,12 @@ pub struct PublicationView {
     pub last_error: Option<String>,
     pub package_dir: Option<String>,
     pub published_url: Option<String>,
+    /// What the platform did that the user should know, e.g. "uploaded as private".
+    pub published_note: Option<String>,
+    /// Upload progress (0–1) while uploading.
+    pub progress_fraction: Option<f64>,
+    /// What the platform says it is doing, e.g. "YouTube is processing the video (50%)".
+    pub progress_text: Option<String>,
     /// What happens next or what the user needs to do, in plain words.
     pub status_text: String,
     pub actions: Vec<Action>,

@@ -82,6 +82,26 @@ struct PublishCheckpoint {
     attempt: Option<AttemptId>,
     media: Option<PreparedMedia>,
     stage: Stage,
+    /// The latest progress the platform reported, for the UI.
+    #[serde(default)]
+    progress: Option<StageProgress>,
+}
+
+/// How far the current stage has got.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub(crate) struct StageProgress {
+    pub(crate) fraction: Option<f64>,
+    pub(crate) detail: Option<String>,
+}
+
+/// The progress an open publish job last recorded.
+pub(crate) fn progress(job: &Job) -> Option<StageProgress> {
+    if job.kind() != JobKind::PublishPublication {
+        return None;
+    }
+    job.checkpoint()
+        .and_then(|c| serde_json::from_value::<PublishCheckpoint>(c.clone()).ok())
+        .and_then(|c| c.progress)
 }
 
 fn upgrade(app: &Weak<App>) -> Result<Arc<App>, JobFailure> {
@@ -471,7 +491,12 @@ impl Run<'_> {
         Ok(())
     }
 
-    async fn published(&self, remote_id: String, url: Option<String>) -> Result<(), JobFailure> {
+    async fn published(
+        &self,
+        remote_id: String,
+        url: Option<String>,
+        note: Option<String>,
+    ) -> Result<(), JobFailure> {
         let now = self.app.now();
         let (rid, u) = (remote_id.clone(), url.clone());
         self.update_attempt(|a| {
@@ -487,7 +512,7 @@ impl Run<'_> {
         self.apply(PublicationEvent::Published {
             url,
             remote_id: Some(remote_id),
-            note: None,
+            note,
         })
         .await?;
         Ok(())
@@ -560,7 +585,7 @@ impl JobHandler for PublishHandler {
             .await
             .map_err(store_failure)?;
         let adapter = if account.capabilities.can_publish_automatically() {
-            app.adapters.get(p.platform())
+            app.adapter(p.platform())
         } else {
             None
         };
@@ -600,7 +625,14 @@ impl JobHandler for PublishHandler {
                 });
             }
             let session = adapter.begin_upload(&sub).await.map_err(adapter_failure)?;
+            let recorded = session.clone();
+            run.update_attempt(|a| a.upload_session = Some(recorded))
+                .await?;
             run.checkpoint.stage = Stage::Uploading { session };
+            run.checkpoint.progress = Some(StageProgress {
+                fraction: Some(0.0),
+                detail: None,
+            });
             run.save().await?;
         }
 
@@ -710,10 +742,25 @@ async fn drive_upload(
                     .await
                     .map_err(adapter_failure)?
                 {
-                    UploadProgress::InProgress { checkpoint, .. } => {
+                    UploadProgress::InProgress {
+                        checkpoint,
+                        fraction,
+                    } => {
+                        // A provider may open a new session (e.g. after one expired).
+                        if let Stage::Uploading { session } = &run.checkpoint.stage
+                            && session.get("upload_url") != checkpoint.get("upload_url")
+                        {
+                            let recorded = checkpoint.clone();
+                            run.update_attempt(|a| a.upload_session = Some(recorded))
+                                .await?;
+                        }
                         run.checkpoint.stage = Stage::Uploading {
                             session: checkpoint,
                         };
+                        run.checkpoint.progress = Some(StageProgress {
+                            fraction: Some(fraction),
+                            detail: None,
+                        });
                     }
                     UploadProgress::Complete { media } => {
                         let remote = media.get("id").and_then(Value::as_str).map(str::to_owned);
@@ -723,9 +770,13 @@ async fn drive_upload(
                         })
                         .await?;
                         run.checkpoint.stage = Stage::Processing { media };
+                        run.checkpoint.progress = None;
                     }
                 }
                 run.save().await?;
+                run.app.emit(AppEvent::PublicationChanged {
+                    id: run.id.to_string(),
+                });
             }
             Stage::Processing { media } => {
                 match adapter
@@ -733,7 +784,18 @@ async fn drive_upload(
                     .await
                     .map_err(adapter_failure)?
                 {
-                    Processing::Pending { poll_after, .. } => {
+                    Processing::Pending { poll_after, detail } => {
+                        let progress = Some(StageProgress {
+                            fraction: None,
+                            detail,
+                        });
+                        if run.checkpoint.progress != progress {
+                            run.checkpoint.progress = progress;
+                            run.save().await?;
+                            run.app.emit(AppEvent::PublicationChanged {
+                                id: run.id.to_string(),
+                            });
+                        }
                         tokio::select! {
                             () = tokio::time::sleep(poll_after.min(MAX_POLL_WAIT)) => {}
                             () = run.ctx.cancelled() => return Err(JobFailure::LeaseLost),
@@ -744,6 +806,7 @@ async fn drive_upload(
                             media,
                             requested: false,
                         };
+                        run.checkpoint.progress = None;
                         run.save().await?;
                     }
                     Processing::Failed { message } => {
@@ -764,7 +827,7 @@ async fn drive_upload(
                     .ok_or_else(|| JobFailure::permanent("no attempt recorded"))?;
                 match adapter.reconcile(&attempt, Some(&media)).await {
                     Ok(Reconciliation::Found { post }) => {
-                        return run.published(post.remote_id, post.url).await;
+                        return run.published(post.remote_id, post.url, post.note).await;
                     }
                     Ok(Reconciliation::NotFound) => {
                         run.checkpoint.stage = Stage::Publishing {
@@ -796,7 +859,7 @@ async fn drive_upload(
                 run.update_attempt(|a| a.mark_publish_requested(now))
                     .await?;
                 match adapter.publish(&sub, &media).await {
-                    Ok(post) => return run.published(post.remote_id, post.url).await,
+                    Ok(post) => return run.published(post.remote_id, post.url, post.note).await,
                     Err(AdapterError::ResponseLost { message }) => {
                         let attempt = run
                             .attempt()
@@ -805,7 +868,7 @@ async fn drive_upload(
                         if let Ok(Reconciliation::Found { post }) =
                             adapter.reconcile(&attempt, Some(&media)).await
                         {
-                            return run.published(post.remote_id, post.url).await;
+                            return run.published(post.remote_id, post.url, post.note).await;
                         }
                         // Never re-sent automatically: the post may exist.
                         return Err(JobFailure::OutcomeUnknown { message });

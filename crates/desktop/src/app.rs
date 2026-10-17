@@ -1,8 +1,8 @@
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 use chrono::{DateTime, Utc};
-use shorts_adapters::{AdapterRegistry, ManualHandoff};
-use shorts_domain::JobKind;
+use shorts_adapters::{AdapterRegistry, ErasedAdapter, ManualHandoff};
+use shorts_domain::{JobKind, Platform};
 use shorts_scheduler::{Clock, Worker, WorkerConfig};
 use shorts_store::Store;
 use tokio::sync::broadcast;
@@ -19,7 +19,7 @@ pub struct App {
     pub(crate) store: Store,
     pub(crate) media: Arc<dyn MediaBackend>,
     pub(crate) paths: AppPaths,
-    pub(crate) adapters: AdapterRegistry,
+    adapters: RwLock<AdapterRegistry>,
     pub(crate) clock: Arc<dyn Clock>,
     events: broadcast::Sender<AppEvent>,
     worker: OnceLock<Arc<Worker>>,
@@ -40,7 +40,7 @@ impl App {
             store,
             media,
             paths,
-            adapters,
+            adapters: RwLock::new(adapters),
             clock,
             events,
             worker: OnceLock::new(),
@@ -53,6 +53,22 @@ impl App {
 
     pub fn paths(&self) -> &AppPaths {
         &self.paths
+    }
+
+    /// Adds (or replaces) the adapter for its platform, e.g. once a connector is set up.
+    pub fn register_adapter(&self, adapter: Arc<dyn ErasedAdapter>) {
+        self.adapters
+            .write()
+            .expect("adapters lock")
+            .register(adapter);
+    }
+
+    pub(crate) fn adapter(&self, platform: Platform) -> Option<Arc<dyn ErasedAdapter>> {
+        self.adapters.read().expect("adapters lock").get(platform)
+    }
+
+    pub(crate) fn clock(&self) -> Arc<dyn Clock> {
+        self.clock.clone()
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<AppEvent> {

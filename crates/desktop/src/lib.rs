@@ -3,7 +3,9 @@
 //! [`App`] ties the crates together: it imports files into the library, curates assets, edits
 //! variants, prepares publications for review, schedules them, and registers the job handlers
 //! that render variants and take approved publications through the publish pipeline (manual
-//! handoff for now). Everything the UI shows comes back as the serializable views in [`views`].
+//! handoff, or a platform adapter such as YouTube's once an account is connected through
+//! [`youtube::YouTubeConnector`]). Everything the UI shows comes back as the serializable views
+//! in [`views`].
 //!
 //! Nothing here holds or exposes credentials; views never include credential references.
 
@@ -25,6 +27,7 @@ pub mod tiktok;
 mod variants;
 pub mod views;
 pub mod watch;
+pub mod youtube;
 
 pub use app::App;
 pub use collections::RuleInput;

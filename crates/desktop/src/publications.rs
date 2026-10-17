@@ -582,6 +582,16 @@ impl App {
             Some(UserAction::PostManually { package_dir }) => Some(package_dir.clone()),
             _ => None,
         };
+        let progress = if p.state().is_active() {
+            self.store
+                .jobs()
+                .open_for(JobKind::PublishPublication, &p.id().to_string())
+                .await?
+                .as_ref()
+                .and_then(pipeline::progress)
+        } else {
+            None
+        };
         Ok(PublicationView {
             id: p.id().to_string(),
             asset_id: p.asset_id().to_string(),
@@ -605,6 +615,9 @@ impl App {
             last_error: p.last_error().map(str::to_owned),
             package_dir,
             published_url: p.published().and_then(|r| r.url.clone()),
+            published_note: p.published().and_then(|r| r.note.clone()),
+            progress_fraction: progress.as_ref().and_then(|g| g.fraction),
+            progress_text: progress.and_then(|g| g.detail),
             status_text: status_text(p, &account_name),
             actions: actions(p),
             updated_at: p.record().updated_at,
@@ -702,7 +715,8 @@ fn actions(p: &Publication) -> Vec<Action> {
         S::Preparing | S::Uploading | S::Processing => vec![A::Cancel],
         S::Publishing | S::Cancelled => vec![],
         S::Published => vec![A::ExportPackage],
-        S::RetryScheduled | S::NeedsAuthentication => vec![A::Edit, A::RevokeApproval, A::Cancel],
+        S::RetryScheduled => vec![A::Edit, A::RevokeApproval, A::Cancel],
+        S::NeedsAuthentication => vec![A::Reconnect, A::Edit, A::RevokeApproval, A::Cancel],
         S::NeedsUserAction => match p.user_action() {
             Some(UserAction::PostManually { .. }) => {
                 vec![A::ConfirmPosted, A::ExportPackage, A::Edit, A::Cancel]
