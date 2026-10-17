@@ -1182,6 +1182,17 @@ dependencies = [
 [[package]]
 name = "shorts-media"
 version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "shorts-domain",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "shorts-scheduler"
