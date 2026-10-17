@@ -261,7 +261,24 @@ you can do:
 
 ## Legal and review material
 
-- Privacy policy, terms of service, Meta data-deletion instructions/callback.
+- **Policy pages (drafted in `site/`).** A privacy policy, terms of service and data-deletion
+  instructions written for how the app actually works (local-first, tokens in Windows
+  Credential Manager, no server of yours holding user data). Meta, LinkedIn, TikTok and Google
+  ask for these as public URLs. To publish them:
+  1. Read all three pages and change anything that doesn't match how you'll use or share the
+     app. Get legal advice if you'll distribute or sell it.
+  2. Repository Settings → Pages → Build and deployment → Source: **GitHub Actions**.
+  3. Settings → Secrets and variables → Actions → Variables: add `POLICY_OPERATOR_NAME` (you or
+     your studio), `POLICY_CONTACT_EMAIL` (a public contact address) and
+     `POLICY_EFFECTIVE_DATE` (e.g. `1 November 2026`). The workflow refuses to publish without
+     them, so no placeholder text goes live.
+  4. Actions → Policy pages → Run workflow (it also runs when `site/` changes on `main`). The
+     pages appear at `https://claymstamper.github.io/shorts-circuit/` (`privacy.html`,
+     `terms.html`, `data-deletion.html`).
+  5. Paste those URLs into each developer app: Meta (Privacy policy URL, Terms of service URL,
+     User data deletion → Data deletion instructions URL), LinkedIn (Privacy policy URL),
+     TikTok (Privacy policy and Terms of service). Google's OAuth verification needs the pages
+     on a domain you own, so it waits for a custom domain (Pages supports one).
 - App-review screencasts of the real OAuth flow (scripted by an agent, recorded by the owner).
 
 ## Ongoing duties

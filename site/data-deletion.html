@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Data Deletion · Shorts Circuit</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <p class="crumbs"><a href="./">Shorts Circuit</a></p>
+  <h1>Data deletion instructions</h1>
+  <p class="meta">Effective {{EFFECTIVE_DATE}} · Operated by {{OPERATOR_NAME}}</p>
+
+  <p>Shorts Circuit keeps your information on your own computer; {{OPERATOR_NAME}} does not hold a
+  copy on any server. To delete everything the app has about you and your accounts:</p>
+
+  <ol>
+    <li><strong>Disconnect your accounts in the app.</strong> Settings → for each YouTube channel,
+      Instagram account and LinkedIn page, choose <em>Disconnect</em>. This deletes the stored
+      access tokens from Windows Credential Manager.</li>
+    <li><strong>Revoke the app's access on each platform.</strong>
+      <ul>
+        <li>Instagram: Settings → Website permissions (or Apps and websites) → remove the app.</li>
+        <li>Google / YouTube: <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>
+          → remove the app.</li>
+        <li>LinkedIn: Settings → Data privacy → Permitted services → remove the app.</li>
+        <li>TikTok (if you used new-post detection): Settings → Security and permissions → Apps and
+          services permissions → remove the app.</li>
+      </ul>
+    </li>
+    <li><strong>Delete the app's data.</strong> Uninstall Shorts Circuit, then delete the folder
+      <code>%LOCALAPPDATA%\io.github.claymstamper.shorts-circuit</code> (library database, imported
+      originals, renders and export packages). Export folders you chose yourself are not removed
+      automatically; delete them too if you like.</li>
+  </ol>
+
+  <p>When you remove the app in Instagram's settings, Meta notifies the app's owner of a deletion
+  request. Because no copy of your data is kept anywhere but your computer, the steps above
+  complete the deletion. For help, write to
+  <a href="mailto:{{CONTACT_EMAIL}}">{{CONTACT_EMAIL}}</a>.</p>
+</main>
+</body>
+</html>
