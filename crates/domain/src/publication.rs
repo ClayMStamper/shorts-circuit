@@ -269,6 +269,9 @@ pub struct PublishedRef {
     pub published_at: DateTime<Utc>,
     /// True when the user posted it through the export package.
     pub manual: bool,
+    /// What the platform did that the user should know, e.g. "uploaded as private".
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -326,6 +329,8 @@ pub enum PublicationEvent {
     Published {
         url: Option<String>,
         remote_id: Option<String>,
+        #[serde(default)]
+        note: Option<String>,
     },
     RetryScheduled {
         at: DateTime<Utc>,
@@ -713,7 +718,11 @@ impl Publication {
                 next.state = S::NeedsUserAction;
                 next.user_action = Some(UserAction::PostManually { package_dir });
             }
-            E::Published { url, remote_id } => {
+            E::Published {
+                url,
+                remote_id,
+                note,
+            } => {
                 if from != S::Publishing {
                     return Err(not_allowed());
                 }
@@ -723,6 +732,7 @@ impl Publication {
                     remote_id,
                     published_at: now,
                     manual: false,
+                    note,
                 });
                 next.last_error = None;
             }
@@ -813,6 +823,7 @@ impl Publication {
                     remote_id: None,
                     published_at: now,
                     manual: true,
+                    note: None,
                 });
             }
             E::ResolveOutcome { resolution } => {
@@ -827,6 +838,7 @@ impl Publication {
                             remote_id,
                             published_at: now,
                             manual: false,
+                            note: None,
                         });
                     }
                     OutcomeResolution::NotPublished => {

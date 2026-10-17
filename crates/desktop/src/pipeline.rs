@@ -487,6 +487,7 @@ impl Run<'_> {
         self.apply(PublicationEvent::Published {
             url,
             remote_id: Some(remote_id),
+            note: None,
         })
         .await?;
         Ok(())

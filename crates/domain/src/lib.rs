@@ -17,6 +17,7 @@ pub mod recipe;
 pub mod schedule;
 pub mod source;
 pub mod variant;
+pub mod youtube;
 
 pub use account::{Capabilities, ConnectedAccount, MissingCapability, NextAction, PublishAccess};
 pub use asset::{Asset, AssetStatus, Permission, PermissionStatus, Rating, Tag};

@@ -112,6 +112,8 @@ impl Adapter for FakeAdapter {
             native_scheduling: false,
             analytics: false,
             manual_handoff: true,
+            private_only: false,
+            notes: Vec::new(),
             checked_at: account.updated_at,
         })
     }

@@ -112,6 +112,7 @@ fn sample_events(variant: VariantId) -> Vec<PublicationEvent> {
         E::Published {
             url: None,
             remote_id: None,
+            note: None,
         },
         E::RetryScheduled {
             at: t0(),
@@ -231,6 +232,7 @@ fn happy_path_reaches_published() {
         E::Published {
             url: Some("https://example.com/p/1".into()),
             remote_id: Some("r1".into()),
+            note: None,
         },
         t0(),
     )

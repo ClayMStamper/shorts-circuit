@@ -1,14 +1,16 @@
 //! Destination platforms and their (indicative) media and copy requirements.
 //!
-//! The limits below are as understood in mid-2026 and are meant for early warnings in review.
-//! Each adapter re-validates against the provider's current rules during Increment 3, and the
-//! numbers here must be confirmed during Increment 1 (see `docs/human-scope.md`).
+//! The limits below are meant for early warnings in review; each adapter re-validates against
+//! the provider's current rules. YouTube's come from [`crate::youtube`], checked against
+//! Google's docs in October 2026; the others are as understood in mid-2026 and still need
+//! confirming (see `docs/human-scope.md`).
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use crate::media::MediaProperties;
+use crate::youtube;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -52,12 +54,12 @@ impl Platform {
     pub fn requirements(self) -> MediaRequirements {
         match self {
             Self::YoutubeShorts => MediaRequirements {
-                min_duration_ms: 1_000,
-                max_duration_ms: 180_000,
-                max_file_bytes: 256 * 1024 * 1024 * 1024,
+                min_duration_ms: youtube::MIN_DURATION_MS,
+                max_duration_ms: youtube::SHORTS_MAX_DURATION_MS,
+                max_file_bytes: youtube::MAX_FILE_BYTES,
                 require_vertical_or_square: true,
-                max_caption_chars: 5_000,
-                max_hashtags: 15,
+                max_caption_chars: youtube::DESCRIPTION_MAX_BYTES,
+                max_hashtags: youtube::MAX_HASHTAGS,
             },
             Self::InstagramReels => MediaRequirements {
                 min_duration_ms: 3_000,
@@ -107,15 +109,47 @@ pub struct MediaRequirements {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ValidationIssue {
-    TooShort { duration_ms: u64, min_ms: u64 },
-    TooLong { duration_ms: u64, max_ms: u64 },
-    FileTooLarge { size_bytes: u64, max_bytes: u64 },
-    NotVertical { width: u32, height: u32 },
-    CaptionTooLong { chars: usize, max: usize },
-    TooManyHashtags { count: usize, max: usize },
+    TooShort {
+        duration_ms: u64,
+        min_ms: u64,
+    },
+    TooLong {
+        duration_ms: u64,
+        max_ms: u64,
+    },
+    FileTooLarge {
+        size_bytes: u64,
+        max_bytes: u64,
+    },
+    NotVertical {
+        width: u32,
+        height: u32,
+    },
+    CaptionTooLong {
+        chars: usize,
+        max: usize,
+    },
+    TooManyHashtags {
+        count: usize,
+        max: usize,
+    },
     NotRendered,
     AudioPermissionMissing,
     VideoPermissionMissing,
+    /// The platform doesn't accept this container.
+    UnsupportedFormat {
+        extension: String,
+    },
+    /// The platform refuses some characters in this field (YouTube: `<` and `>`).
+    ForbiddenCharacters {
+        field: String,
+    },
+    /// The copy is longer than the platform allows, counted in bytes.
+    TooManyBytes {
+        field: String,
+        bytes: usize,
+        max: usize,
+    },
 }
 
 impl fmt::Display for ValidationIssue {
@@ -161,6 +195,18 @@ impl fmt::Display for ValidationIssue {
             }
             Self::VideoPermissionMissing => {
                 f.write_str("video permission is not recorded as granted")
+            }
+            Self::UnsupportedFormat { extension } if extension.is_empty() => {
+                f.write_str("the file has no extension, so its format is unknown")
+            }
+            Self::UnsupportedFormat { extension } => {
+                write!(f, ".{extension} files are not accepted")
+            }
+            Self::ForbiddenCharacters { field } => {
+                write!(f, "the {field} contains < or >, which the platform refuses")
+            }
+            Self::TooManyBytes { field, bytes, max } => {
+                write!(f, "the {field} is {bytes} bytes; the maximum is {max}")
             }
         }
     }
