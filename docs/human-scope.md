@@ -10,7 +10,7 @@ Increment 1.
 |---|---|---|
 | Snapchat | Apply for Public Profile API allowlisting; own a Snapchat Public Profile. | External approval with unknown turnaround. Until granted, Snapchat uses the export package. |
 | YouTube | YouTube API compliance audit; Google OAuth verification for the `youtube.upload` scope (only needed to leave Testing mode). | Since 2020, unaudited projects have had uploads locked to private (Google's current `videos.insert` page now says they aren't; the app uploads private until you say otherwise, see below). Default quota: 100 uploads a day in their own bucket, plus 10,000 units for everything else; the audit / quota extension form is how either is raised. |
-| Instagram | Meta App Review for `instagram_business_content_publish`, possibly Business Verification. | Testing works without review by adding your account as an app tester; review is needed for anyone else. |
+| Instagram | Meta App Review for `instagram_business_content_publish`, possibly Business Verification (only to publish for accounts that aren't on your app). | Not a gate for you: your own professional account, added to the app as an Instagram tester, publishes without review (see below). |
 | LinkedIn | Developer app linked to a verified Company Page you administer. | Member posting is self-serve; organization posting needs the Community Management API on its own dedicated app. |
 | TikTok (optional) | Register a TikTok developer app for new-post detection and get it through TikTok's app review (details below). | Only needed for detecting new posts; without it the feature shows as unavailable and the watch folder still imports originals. Review turnaround is outside our control. |
 
@@ -114,6 +114,58 @@ Use a throwaway or test channel the first time.
 10. Record the video id, processing states seen and any surprises in the PR or an issue
     (Integration acceptance in `docs/architecture.md`).
 
+### Instagram Reels (second publishing connector)
+
+The app publishes Reels through the Instagram API with Instagram Login, uploading the file
+straight from your PC. You connect an account by pasting a token from your Meta app's
+dashboard, so there is no redirect address to host and no app secret in the app. What you do
+once:
+
+1. **Professional account.** In the Instagram app: Settings → Account type and tools → switch
+   to a **Creator** or **Business** account (free; no Facebook Page needed).
+2. **Meta app.** At developers.facebook.com → My Apps → Create app. Pick the use case for
+   managing messaging and content on Instagram (the "Instagram API" product), app type
+   Business if asked. The app can stay in **Development** mode.
+3. **Add your account as a tester.** App dashboard → App roles → Roles → Add people →
+   **Instagram Tester** → your Instagram username. Accept the invitation in Instagram (Settings
+   → Website permissions / Apps and websites → Tester invites), or on instagram.com.
+4. **Permissions.** Instagram → API setup with Instagram login: make sure
+   `instagram_business_basic` and `instagram_business_content_publish` are included.
+5. **Generate the token.** Same page → Generate access tokens → Add account → sign in to the
+   professional account → allow → **Generate token**. Copy it (it starts with `IGAA`). It is a
+   long-lived token (60 days).
+6. **Paste it into the app.** Settings → Instagram Reels publishing → Access token → Connect.
+   The token goes to Windows Credential Manager (`instagram:<account id>`), never into the
+   database, logs, or the repo.
+7. **Keeping it alive.** The app renews the token for another 60 days whenever it has less
+   than 20 days left, as long as the app runs at least every few weeks. If it lapses (or you
+   remove the app's access in Instagram), the account shows *needs reconnecting*: generate a
+   new token (step 5) and paste it with **Reconnect**. Waiting publications then continue.
+
+Confirm the dashboard names and permission names when you do this; Meta renames them often.
+App Review is only needed if the app should publish for Instagram accounts that aren't on
+your app's roles.
+
+### Instagram smoke test (Windows)
+
+Use a test professional account the first time if you have one; Reels published here are
+public.
+
+1. Do the Instagram steps above; Settings shows the account as *connected* with a "good
+   until" date about 60 days out.
+2. Collections → New collection "Instagram MVP" → add a rule with destination the account,
+   publications *submitted for my approval*. Route the watch folder into it (Settings →
+   Folders), or add an asset to the collection by hand.
+3. Drop a short MP4 (3 seconds to a few minutes; vertical 1080×1920 looks best) into the
+   watch folder. The Monitor shows an Instagram publication *Waiting for your approval*.
+4. Review it, set the time to now and **Approve**.
+5. Watch the Monitor: *Uploading* → *Instagram is processing the reel* → *Published* with a
+   link to the reel. Open it to check the caption and hashtags.
+6. Optional: quit the app during *Uploading* with a larger file and start it again; the
+   upload repeats into the same container instead of creating a second post.
+7. Record the container id, the media id and anything surprising (error codes, how long
+   processing took) in the PR or an issue.
+
 ## Watch folder
 
 Pick a folder your phone or editor syncs finished videos into (e.g. a OneDrive, Google Drive,
@@ -135,7 +187,8 @@ Prefer the original export over a video saved back from TikTok, which carries a 
 - Domain: OAuth redirects, Google domain verification, privacy-policy hosting.
 - OAuth backend hosting (Axum + Postgres): needed from Increment 1, since Meta and LinkedIn token
   exchange requires a client secret.
-- Object storage for media staging, unless Instagram resumable upload removes the need.
+- Object storage for media staging: not needed for Instagram (the app uploads the file to the
+  container directly); possibly for other providers that only fetch a public URL.
 - Code signing: Windows (Azure Trusted Signing or OV cert); Apple Developer Program for macOS.
 
 ## Legal and review material
@@ -146,6 +199,8 @@ Prefer the original export over a video saved back from TikTok, which carries a 
 ## Ongoing duties
 
 - Approving publications; resolving `OutcomeUnknown` publishes.
+- Keeping the app running at least every few weeks so Instagram tokens get renewed, or pasting
+  a new token when an account says *needs reconnecting*.
 - Switching a YouTube channel to public uploads once the Google Cloud project passes the API
   audit.
 - Re-authentication: Google refresh tokens expire after 7 days while the consent screen is in

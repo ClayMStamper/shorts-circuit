@@ -260,6 +260,37 @@ publish are separate operations so interrupted work resumes at the correct step.
   256 GB in a supported container; title ≤ 100 characters and description ≤ 5,000 bytes, without
   `<` or `>`.
 
+### Instagram Reels connector (Increment 3, second slice)
+
+- **Sign-in.** The owner pastes a long-lived token generated in their Meta app's dashboard
+  (Instagram → API setup with Instagram login → Generate token) for a professional account
+  added to the app. No redirect address, hosting or app secret is needed. `GET /me` identifies
+  the account (`user_id`, `username`, `account_type`); personal accounts are refused with the
+  next step. The token and user id live in the OS credential store (`instagram:<account id>`).
+- **Renewal.** Long-lived tokens last 60 days and can be renewed with themselves once a day
+  old (`GET /refresh_access_token?grant_type=ig_refresh_token`). The connector renews a token
+  when it has under 20 days left, on use and every 6 hours while the app runs. An expired or
+  refused token moves publications to `NeedsAuthentication`; pasting a new token for the same
+  account reconnects it and resumes them. (A browser OAuth flow would need an HTTPS redirect
+  and the app secret, i.e. the broker; it can be added when the app is shared.)
+- **Upload.** `POST /{ig-user-id}/media` with `media_type=REELS`, `upload_type=resumable`,
+  the caption and `share_to_feed=true` creates a container; the file goes to the container's
+  `rupload.facebook.com/ig-api-upload/<version>/<container>` address in one request
+  (`Authorization: OAuth`, `offset: 0`, `file_size`). Re-sending replaces the bytes, so an
+  interrupted upload simply repeats; a checkpoint older than 23 hours opens a new container
+  (containers expire after 24). No public video URL or staging storage is needed.
+- **Processing and publish.** The container's `status_code` is polled until `FINISHED`
+  (`ERROR`/`EXPIRED` fail the attempt). Publish checks `content_publishing_limit` (100 API
+  posts per 24 hours), calls `media_publish`, then reads the reel's permalink. Reconcile reads
+  the container: `PUBLISHED` → the reel is found among the account's recent media by caption
+  digest; `FINISHED` → nothing was published, so publishing again is safe.
+- **Errors.** Graph error codes 190/102/463/467 ask for a reconnect, 10/200–299 for a
+  reconnect with the publishing permission, 4/17/32/613/80002 (and 429) pause 15 minutes, and
+  subcode 2207042 (posting limit) pauses an hour. Transient or 5xx errors retry.
+- **Limits** (`shorts_domain::instagram`): MP4/MOV, 3 s to 15 min, 300 MB, any aspect ratio
+  between 0.01:1 and 10:1, caption ≤ 2,200 characters, ≤ 30 hashtags and ≤ 20 @mentions. The
+  Graph API version defaults to `v24.0` (`SHORTS_INSTAGRAM_API_VERSION` overrides it).
+
 ## Delivery plan
 
 | Increment | Reviewable outcome |
