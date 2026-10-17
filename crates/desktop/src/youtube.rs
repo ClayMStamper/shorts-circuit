@@ -24,8 +24,8 @@ use shorts_adapters::youtube::{
 };
 use shorts_adapters::{Adapter, AdapterError};
 use shorts_domain::{
-    AccountId, Capabilities, ConnectedAccount, NextAction, Platform, PublicationEvent,
-    PublicationState, PublishAccess,
+    AccountId, Capabilities, ConnectedAccount, ExecutionOwner, NextAction, Platform,
+    PublicationEvent, PublicationState, PublishAccess,
 };
 use shorts_store::{PublicationFilter, Store};
 use tokio_util::sync::CancellationToken;
@@ -758,6 +758,8 @@ impl YouTubeConnector {
             .list(&PublicationFilter {
                 account_id: Some(account),
                 states: vec![PublicationState::NeedsAuthentication],
+                // The cloud runner resumes its own once it gets the new credential.
+                owner: Some(ExecutionOwner::Desktop),
                 ..Default::default()
             })
             .await?;

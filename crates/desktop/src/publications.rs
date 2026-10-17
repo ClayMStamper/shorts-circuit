@@ -5,9 +5,10 @@ use serde::Deserialize;
 use serde_json::json;
 use shorts_domain::platform::full_caption;
 use shorts_domain::{
-    AccountId, AssetId, Destination, Job, JobKind, JobState, MediaProperties, OutcomeResolution,
-    PermissionStatus, Publication, PublicationEvent, PublicationId, PublicationState,
-    RevisionContent, Schedule, TimeZoneName, UserAction, ValidationIssue, VariantId,
+    AccountId, AssetId, Destination, ExecutionOwner, Job, JobKind, JobState, MediaProperties,
+    OutcomeResolution, PermissionStatus, Publication, PublicationEvent, PublicationId,
+    PublicationState, RevisionContent, Schedule, TimeZoneName, UserAction, ValidationIssue,
+    VariantId,
 };
 use shorts_scheduler::resolve_local;
 use shorts_store::{PublicationFilter, StoreError};
@@ -484,10 +485,12 @@ impl App {
         let now = self.now();
         let revision = p.revision().number;
         let open = jobs.open_for(JobKind::PublishPublication, &subject).await?;
-        match p.due_at() {
+        // The cloud runner executes publications it owns; this computer keeps no job for them.
+        let due = p.due_at().filter(|_| p.owner() == ExecutionOwner::Desktop);
+        match due {
             Some(at) => {
                 if let Some(job) = open {
-                    let same = pipeline::job_revision(&job) == Some(revision);
+                    let same = shorts_publish::job_revision(&job) == Some(revision);
                     match job.state() {
                         JobState::Running => {}
                         JobState::Queued if same => {
@@ -507,7 +510,7 @@ impl App {
                         .await?
                         .filter(|j| {
                             matches!(j.state(), JobState::Failed | JobState::Expired)
-                                && pipeline::job_revision(j) == Some(revision)
+                                && shorts_publish::job_revision(j) == Some(revision)
                         });
                     match resumable {
                         // Keeps the checkpoint, so a retry resumes where it stopped.
@@ -519,13 +522,14 @@ impl App {
                 }
             }
             None => {
-                let withdrawn = matches!(
-                    p.state(),
-                    PublicationState::Draft
-                        | PublicationState::AwaitingApproval
-                        | PublicationState::Cancelled
-                        | PublicationState::Published
-                );
+                let withdrawn = p.owner() != ExecutionOwner::Desktop
+                    || matches!(
+                        p.state(),
+                        PublicationState::Draft
+                            | PublicationState::AwaitingApproval
+                            | PublicationState::Cancelled
+                            | PublicationState::Published
+                    );
                 if withdrawn && let Some(job) = open {
                     jobs.modify(job.id(), |j| j.cancel(now)).await?;
                 }
@@ -536,15 +540,7 @@ impl App {
     }
 
     async fn enqueue_publish(&self, p: &Publication, at: DateTime<Utc>) -> AppResult<()> {
-        let job = Job::new(
-            JobKind::PublishPublication,
-            p.id().to_string(),
-            json!({ "revision": p.revision().number }),
-            at,
-            true,
-            PUBLISH_MAX_FAILURES,
-            self.now(),
-        );
+        let job = shorts_publish::publish_job(p, at, PUBLISH_MAX_FAILURES, self.now());
         match self.store.jobs().insert(&job).await {
             Ok(()) => Ok(()),
             Err(StoreError::DuplicateOpenJob { .. }) => {
@@ -588,7 +584,7 @@ impl App {
                 .open_for(JobKind::PublishPublication, &p.id().to_string())
                 .await?
                 .as_ref()
-                .and_then(pipeline::progress)
+                .and_then(shorts_publish::progress)
         } else {
             None
         };

@@ -12,7 +12,7 @@ use crate::error::AppResult;
 use crate::events::AppEvent;
 use crate::media::MediaBackend;
 use crate::paths::AppPaths;
-use crate::pipeline::{ExportHandler, PublishHandler, RenderHandler};
+use crate::pipeline::{DesktopHost, ExportHandler, RenderHandler};
 
 /// The application core used by the desktop shell.
 pub struct App {
@@ -108,7 +108,9 @@ impl App {
         );
         worker.register(
             JobKind::PublishPublication,
-            Arc::new(PublishHandler::new(weak.clone())),
+            Arc::new(shorts_publish::PublishHandler::new(Arc::new(
+                DesktopHost::new(weak.clone()),
+            ))),
         );
         worker.register(JobKind::ExportPackage, Arc::new(ExportHandler::new(weak)));
         let worker = Arc::new(worker);

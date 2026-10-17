@@ -46,5 +46,6 @@ shorts-adapters = { path = "crates/adapters" }
 shorts-desktop = { path = "crates/desktop" }
 shorts-domain = { path = "crates/domain" }
 shorts-media = { path = "crates/media" }
+shorts-publish = { path = "crates/publish" }
 shorts-scheduler = { path = "crates/scheduler" }
 shorts-store = { path = "crates/store" }

@@ -30,8 +30,8 @@ use shorts_adapters::snapchat::{
 };
 use shorts_adapters::{Adapter, AdapterError};
 use shorts_domain::{
-    AccountId, Capabilities, ConnectedAccount, Platform, PublicationEvent, PublicationState,
-    snapchat,
+    AccountId, Capabilities, ConnectedAccount, ExecutionOwner, Platform, PublicationEvent,
+    PublicationState, snapchat,
 };
 use shorts_store::{PublicationFilter, Store};
 use tokio_util::sync::CancellationToken;
@@ -804,6 +804,8 @@ impl SnapchatConnector {
             .list(&PublicationFilter {
                 account_id: Some(account),
                 states: vec![PublicationState::NeedsAuthentication],
+                // The cloud runner resumes its own once it gets the new credential.
+                owner: Some(ExecutionOwner::Desktop),
                 ..Default::default()
             })
             .await?;

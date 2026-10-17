@@ -23,8 +23,8 @@ use shorts_adapters::instagram::{
 };
 use shorts_adapters::{Adapter, AdapterError};
 use shorts_domain::{
-    AccountId, Capabilities, ConnectedAccount, Platform, PublicationEvent, PublicationState,
-    instagram,
+    AccountId, Capabilities, ConnectedAccount, ExecutionOwner, Platform, PublicationEvent,
+    PublicationState, instagram,
 };
 use shorts_store::{PublicationFilter, Store};
 use tokio_util::sync::CancellationToken;
@@ -521,6 +521,8 @@ impl InstagramConnector {
             .list(&PublicationFilter {
                 account_id: Some(account),
                 states: vec![PublicationState::NeedsAuthentication],
+                // The cloud runner resumes its own once it gets the new credential.
+                owner: Some(ExecutionOwner::Desktop),
                 ..Default::default()
             })
             .await?;

@@ -24,8 +24,8 @@ use shorts_adapters::linkedin::{
 };
 use shorts_adapters::{Adapter, AdapterError};
 use shorts_domain::{
-    AccountId, Capabilities, ConnectedAccount, Platform, PublicationEvent, PublicationState,
-    linkedin,
+    AccountId, Capabilities, ConnectedAccount, ExecutionOwner, Platform, PublicationEvent,
+    PublicationState, linkedin,
 };
 use shorts_store::{PublicationFilter, Store};
 use tracing::{info, warn};
@@ -452,6 +452,8 @@ impl LinkedInConnector {
             .list(&PublicationFilter {
                 account_id: Some(account),
                 states: vec![PublicationState::NeedsAuthentication],
+                // The cloud runner resumes its own once it gets the new credential.
+                owner: Some(ExecutionOwner::Desktop),
                 ..Default::default()
             })
             .await?;

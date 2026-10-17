@@ -23,6 +23,7 @@ serde_json.workspace = true
 shorts-adapters.workspace = true
 shorts-domain.workspace = true
 shorts-media.workspace = true
+shorts-publish.workspace = true
 shorts-scheduler.workspace = true
 shorts-store.workspace = true
 thiserror.workspace = true
