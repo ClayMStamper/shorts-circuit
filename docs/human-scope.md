@@ -8,7 +8,7 @@ Increment 1.
 
 | Platform | Action | Why it blocks |
 |---|---|---|
-| Snapchat | Apply for Public Profile API allowlisting; own a Snapchat Public Profile. | External approval with unknown turnaround. Until granted, Snapchat uses the export package. |
+| Snapchat | Create a Snap OAuth app in Ads Manager, apply for Public Profile API allowlisting with its client id; own a Snapchat Public Profile (details below). | External approval with unknown turnaround. Until granted, Snapchat uses the export package. |
 | YouTube | YouTube API compliance audit; Google OAuth verification for the `youtube.upload` scope (only needed to leave Testing mode). | Since 2020, unaudited projects have had uploads locked to private (Google's current `videos.insert` page now says they aren't; the app uploads private until you say otherwise, see below). Default quota: 100 uploads a day in their own bucket, plus 10,000 units for everything else; the audit / quota extension form is how either is raised. |
 | Instagram | Meta App Review for `instagram_business_content_publish`, possibly Business Verification (only to publish for accounts that aren't on your app). | Not a gate for you: your own professional account, added to the app as an Instagram tester, publishes without review (see below). |
 | LinkedIn | Developer app linked to a verified Company Page you administer. | Member posting is self-serve; organization posting needs the Community Management API on its own dedicated app. |
@@ -205,6 +205,70 @@ afterwards on LinkedIn).
    link to the post. Check the caption, hashtags and video title on LinkedIn.
 5. Record the video URN, post URN and anything surprising in the PR or an issue.
 
+### Snapchat Spotlight (fourth publishing connector)
+
+The app posts to Spotlight from your PC through Snap's Public Profile API, using a Snap OAuth
+app you create. Snap only lets allowlisted apps use that API, so the slow part is waiting for
+Snap. Until then, Snapchat publications use export packages. What you do once:
+
+1. **Public Profile.** In the Snapchat app, make sure the account you'll post as has a
+   **Public Profile** (Profile → Public Profile; create one if needed), and that you are its
+   owner or an admin.
+2. **OAuth app (Ads Manager, not the Developer Portal).** Sign in at ads.snapchat.com with that
+   Snapchat account (create a free Business account if asked). Go to **Business Details** →
+   **OAuth apps** → create an app. Name it (e.g. "Shorts Circuit"). Copy the **client id** and
+   the **client secret**; Snap shows the secret only once. (Apps from the Snap Kit Developer
+   Portal are a different kind and don't work with the Public Profile API.)
+3. **Redirect address.** In the same OAuth app, add exactly this redirect URI:
+   `http://127.0.0.1:47615/snapchat/callback`. That lets the app catch the sign-in itself. If
+   Snap refuses an `http` address, register
+   `https://claymstamper.github.io/shorts-circuit/snap-callback.html` instead (published by the
+   Policy pages workflow, see Legal below); that page shows a short text you paste back into the
+   app. Use the same address in step 5, character for character.
+4. **Ask for allowlisting.** Send Snap the **client id** (never the secret) and ask for Public
+   Profile API access for it, using the contact or form Snap's Public Profile API "Get Started"
+   page names (or your Snap partner contact). Say it posts your own Spotlight videos from a
+   desktop app. Wait for their answer; the turnaround is outside our control.
+5. **Paste the app into Shorts Circuit.** Settings → Snapchat Spotlight publishing → 1. Your
+   Snap OAuth app → Client ID, Client secret and Redirect address (the loopback address is
+   filled in; replace it with the https page if you registered that) → Save. They go to Windows
+   Credential Manager (entry `io.github.claymstamper.shorts-circuit` / `snap_oauth_client`),
+   never into the database, logs, or the repo.
+6. **Connect the profile.** Settings → **Connect a Snapchat public profile…** → your browser
+   opens Snap's sign-in → sign in as the profile's owner → allow. With the loopback address the
+   tab says you can close it; with the https page, click **Copy** there and paste the text into
+   **Paste the text from the page** → Finish connecting. The profile appears as *connected*.
+   Signing in before Snap has allowlisted the app fails with an access error; try again once
+   they confirm.
+7. **If it says *needs reconnecting*.** Access tokens last an hour and the app renews them on
+   its own. If Snap ends the sign-in (you removed the app's access, changed the client secret,
+   or the refresh token expired), publications for the profile stop at *Needs authentication*:
+   click **Reconnect …**, sign in again, and they continue.
+
+Confirm the Ads Manager menu names, the allowlisting route and whether `http://127.0.0.1`
+redirects are accepted when you do this; they are as understood in October 2026.
+
+### Snapchat smoke test (Windows)
+
+Spotlight posts are public once Snap's review approves them, so post something you're happy
+to keep (you can delete it from the profile in the Snapchat app).
+
+1. Do the Snapchat steps above; Settings shows the profile as *connected*, and **Check
+   connection** keeps it that way.
+2. Collections → New collection "Snapchat MVP" → rule with the profile as destination,
+   publications *submitted for my approval*; route the watch folder into it.
+3. Drop a vertical MP4 of 6 to 60 seconds, at least 540×960 (1080×1920 is ideal), into the
+   watch folder. Keep the caption short: Spotlight descriptions are cut at 160 characters.
+4. Review it, set the time to now and **Approve**.
+5. Watch the Monitor: *Uploading* (the file is encrypted and sent in parts) → *Published*.
+   Snap reviews Spotlight posts, so it can take a while to appear on the profile.
+6. Optional: quit the app during *Uploading* with a larger file (over 32 MB) and start it
+   again; the upload continues with the next part.
+7. Record the media id, the Spotlight id, how long Snap's review took, and anything surprising
+   (error codes, rejected fields) in the PR or an issue. In particular, note whether any step
+   failed in a way that points at the unverified details listed under "Snapchat Spotlight
+   connector" in `docs/architecture.md`.
+
 ## Watch folder
 
 Pick a folder your phone or editor syncs finished videos into (e.g. a OneDrive, Google Drive,
@@ -214,7 +278,8 @@ Prefer the original export over a video saved back from TikTok, which carries a 
 
 ## Accounts and sign-ins
 
-- Developer accounts: Google Cloud, Meta for Developers, Snap Kit, LinkedIn Developers, and
+- Developer accounts: Google Cloud, Meta for Developers, Snapchat Ads Manager (Business
+  account), LinkedIn Developers, and
   (optional) TikTok for Developers.
 - Throwaway test destination accounts: YouTube channel, Instagram Professional account, LinkedIn
   member + Company Page, Snapchat Public Profile.
@@ -224,9 +289,10 @@ Prefer the original export over a video saved back from TikTok, which carries a 
 ## Paid infrastructure
 
 - Domain: OAuth redirects, Google domain verification, privacy-policy hosting.
-- OAuth backend hosting (Axum + Postgres): **not needed for publishing to YouTube, Instagram or
-  LinkedIn** (YouTube uses a desktop OAuth client; Instagram and LinkedIn are connected with
-  pasted tokens). Needed for TikTok new-post detection, for a browser sign-in flow if the app is
+- OAuth backend hosting (Axum + Postgres): **not needed for publishing to YouTube, Instagram,
+  LinkedIn or Snapchat** (YouTube uses a desktop OAuth client; Instagram and LinkedIn are
+  connected with pasted tokens; Snapchat uses your own Snap OAuth app, pasted into the app, with
+  a loopback redirect or the free GitHub Pages sign-in page). Needed for TikTok new-post detection, for a browser sign-in flow if the app is
   shared with other people, and for cloud mode (posting while the PC is off).
 - Object storage for media staging: not needed for Instagram (the app uploads the file to the
   container directly); possibly for other providers that only fetch a public URL.
@@ -274,7 +340,7 @@ you can do:
      them, so no placeholder text goes live.
   4. Actions → Policy pages → Run workflow (it also runs when `site/` changes on `main`). The
      pages appear at `https://claymstamper.github.io/shorts-circuit/` (`privacy.html`,
-     `terms.html`, `data-deletion.html`).
+     `terms.html`, `data-deletion.html`, and `snap-callback.html`, the Snapchat sign-in page).
   5. Paste those URLs into each developer app: Meta (Privacy policy URL, Terms of service URL,
      User data deletion → Data deletion instructions URL), LinkedIn (Privacy policy URL),
      TikTok (Privacy policy and Terms of service). Google's OAuth verification needs the pages
@@ -292,6 +358,9 @@ you can do:
   Testing (the app asks with a Reconnect button; see YouTube above); LinkedIn access tokens last
   60 days and programmatic refresh is partner-only, so paste a new token every two months (the
   app warns a week ahead).
+- Snapchat reconnects: the app renews hourly access tokens itself; reconnect when a profile says
+  *needs reconnecting* (for example after rotating the Snap OAuth app's secret: paste the new
+  one in Settings, then reconnect).
 - Meta annual data-use checkup; periodic YouTube re-audits.
 - Getting original videos into the watch folder (phone or editor sync), and confirming the
   suggested match when a detected TikTok post and an arriving file belong together.

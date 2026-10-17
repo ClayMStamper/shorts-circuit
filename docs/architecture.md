@@ -45,7 +45,7 @@ application lacks API access.
 | TikTok (source) | The Display API provides metadata, share links, and embeds, but no source-video download field. Import original files or authorized exports; a saved TikTok URL can remain a library item awaiting media. oEmbed covers link metadata without auth. The optional new-post detector (below) uses only `user.info.basic` and `video.list`. |
 | YouTube Shorts | Upload through the YouTube Data API using resumable uploads. Validate the asset against Shorts format rules; uploading a video and being classified as a Short are distinct concerns. Implemented first (Increment 3, below). |
 | Instagram Reels | Professional accounts publish through a media-container workflow (Instagram Login, no linked Facebook Page needed). Model container creation, processing, and publication as separate steps. |
-| Snapchat Spotlight | The Public Profile API supports Spotlight publication but requires application allowlisting. Verify access before enabling automation; otherwise offer export and manual handoff. |
+| Snapchat Spotlight | The Public Profile API supports Spotlight publication but requires application allowlisting. Verify access before enabling automation; otherwise offer export and manual handoff. Implemented as the fourth connector (below); unverified against a real account. |
 | LinkedIn | Upload media through the Videos API, then reference it in a Posts API request. Check member vs organization permissions. Feed placement is outside the app's control. |
 
 ### Account capabilities
@@ -222,6 +222,11 @@ publish are separate operations so interrupted work resumes at the correct step.
   confidential. The owner creates their own and pastes it into the app; the desktop does the
   loopback sign-in and token refresh with Google directly, and keeps the client and refresh
   tokens in the OS credential store.
+- Snapchat follows the same owner-supplied pattern with a confidential client: the owner
+  creates their own Snap OAuth app and pastes its id and secret, which stay in the OS credential
+  store on the owner's computer and are only sent to Snap's token endpoint. The browser sign-in
+  returns either to a loopback port or to a static page that shows the code for pasting
+  (below). Nothing is shipped in the binary, so this is not a shared secret.
 - For providers that fetch a video URL, stage only the required variant at an unguessable HTTPS URL,
   keep it through processing and retries, then delete it under a defined retention policy.
 
@@ -323,6 +328,85 @@ publish are separate operations so interrupted work resumes at the correct step.
   characters after escaping. Metrics aren't collected yet (they need the organization share
   statistics API).
 
+### Snapchat Spotlight connector (Increment 3, fourth slice)
+
+Built from Snap's public Public Profile API docs (Get Started, authentication, Profile Asset
+Management, Spotlight) as read on 17 October 2026, without an allowlisted app to test against.
+The list at the end says which details are assumptions to confirm in the first smoke test.
+
+- **Sign-in.** OAuth 2 authorization code with the owner's Snap OAuth app, created in Ads
+  Manager (Business Details → OAuth apps), scope `snapchat-profile-api`, a random `state` and
+  the client secret at the token endpoint (no PKCE; it is a confidential client). The redirect
+  address is whatever the owner registered with Snap and saved in Settings, and it decides how
+  the code comes back:
+  - `http://127.0.0.1:<port>/…` (default `http://127.0.0.1:47615/snapchat/callback`): the app
+    listens on that fixed port (Snap needs an exact match, so it can't be random) and ignores
+    requests with any other state, like the YouTube sign-in;
+  - any `https://` page, intended for `site/snap-callback.html` on GitHub Pages if Snap refuses
+    `http`: the static page reads `state` and `code` from its query string in the browser and
+    shows `<state>.<code>`; the owner pastes it into Settings, which checks the state against
+    the sign-in it started and exchanges the code. The page makes no requests (CSP
+    `default-src 'none'`), suppresses the referrer and removes the code from the address bar.
+    The code alone is useless without the client secret, which never leaves the owner's PC.
+  After the exchange, `GET /v1/public_profiles/my_profile` identifies the profile. The OAuth
+  app (`snap_oauth_client`: client id, secret, redirect address) and each profile's refresh
+  token and profile id (`snapchat:<account id>`) live in the OS credential store; SQLite holds
+  only the account, its capability record and a non-secret status record. The redirect address
+  is shown in Settings; the secret is never returned to the webview.
+- **Tokens.** Access tokens last an hour and are kept in memory; the connector refreshes them
+  with the refresh token and client secret when one is needed (two minutes before expiry or on
+  a 401, once), storing a rotated refresh token if Snap returns one. `invalid_grant` or a
+  refused client marks the profile *needs reconnecting* and moves publications to
+  `NeedsAuthentication`; reconnecting the same profile resumes them. Disconnecting deletes the
+  grant and leaves the destination on export packages.
+- **Upload.** A fresh AES-256-CBC key and IV per upload (PKCS#7 padding). `POST
+  /v1/public_profiles/{id}/media` with `type: VIDEO`, a name, and the base64 key and IV creates
+  the media and returns `media_id`, `add_path` and `finalize_path`. The ciphertext goes up in
+  parts of up to 32 MB (at most 35) as multipart `POST`s to `add_path` (`action=ADD`,
+  `part_number`, `file`), then `finalize_path` (`action=FINALIZE`). The checkpoint holds the
+  key, IV, part count and parts sent, so a restart re-encrypts the same file to the same bytes
+  and continues with the next part; re-sending a part is treated as harmless. Media lasts 24
+  hours, so a checkpoint older than 23 hours creates new media.
+- **Processing and publish.** Snap has no media status call, so processing is reported ready
+  and problems surface when posting. Publish is `POST /v1/public_profiles/{id}/spotlights`
+  with `media_id`, `locale` (`en_US`, `SHORTS_SNAPCHAT_LOCALE` overrides it) and the caption
+  plus hashtags on one line, cut to 160 characters. The id comes from `spotlight_id` (or
+  `id`); a success without one is `OutcomeUnknown`. Snap reviews Spotlight posts, so there is
+  no public link to record. Reconcile lists the profile's Spotlight posts and accepts one that
+  names this media id; otherwise the user decides, since "not listed" can't prove "not posted".
+- **Errors.** 401 retries once with a fresh token, then asks for a reconnect; 403 asks for a
+  reconnect and names allowlisting; 429 waits `Retry-After` or a minute; 5xx retries;
+  `MEDIA_EXPIRED` asks to publish again; other 4xx are invalid submissions.
+- **Limits** (`shorts_domain::snapchat`): MP4, 6 to 60 s, at least 540×960
+  (`ValidationIssue::ResolutionTooLow`), up to 1 GB, description ≤ 160 characters. Metrics
+  aren't collected.
+
+**From Snap's docs:** the Ads Manager OAuth app, the authorize URL and the
+`snapchat-profile-api` scope, hourly access tokens refreshed with the client secret, the
+`businessapi.snapchat.com` base, `my_profile`, AES-256-CBC with a per-upload key and IV, the
+media → `add_path` / `finalize_path` flow with 32 MB parts, the 24-hour media lifetime, the
+Spotlight endpoint and its review, and the format limits above.
+
+**Assumptions to confirm** (the first smoke test settles them; each is a small change in
+`crates/adapters/src/snapchat.rs`):
+
+1. **Media creation body.** The adapter sends JSON `{type, name, key, iv}` with base64 key and
+   IV, and reads `media_id`, `add_path` and `finalize_path` from anywhere in the answer. The
+   docs' exact field names, nesting (e.g. a `media: [...]` wrapper) and encoding are unverified.
+2. **Encrypted or plain parts.** The adapter uploads the ciphertext in parts (and sizes the part
+   count from the padded length). If Snap expects the plain file in the parts and only uses the
+   key and IV for storage, uploads will fail or the video won't play; switch `encrypted()` to
+   the plain bytes.
+3. **Token URL.** `https://accounts.snapchat.com/login/oauth2/access_token` is used for both the
+   code exchange and refresh. If the exchange returns 404 and Snap's current page names
+   `…/oauth2/token` instead, change `TOKEN_URL`.
+4. **Spotlight listing.** Reconcile assumes `GET /v1/public_profiles/{id}/spotlights` lists
+   posts with the media id they were made from. If it doesn't, reconcile always leaves the
+   outcome to the user (safe, but manual).
+5. Also unconfirmed: whether Snap accepts an `http://127.0.0.1` redirect (else the paste page),
+   whether refresh tokens rotate, the `my_profile` field names (`id`, `display_name`,
+   `snap_user_name`), and the error body fields (`error_code`, `display_message`).
+
 ## Delivery plan
 
 | Increment | Reviewable outcome |
@@ -345,8 +429,9 @@ and a safe recovery action.
    (granular quota buckets, June 2026)
 3. YouTube Help — Understand three-minute Shorts
 4. Meta — Instagram API documentation (official Postman collection)
-5. Snap — Public Profile API: Get Started
-6. Snap — Profile Asset Management / Spotlight publishing
+5. Snap — Public Profile API: Get Started; authentication (OAuth apps in Ads Manager)
+6. Snap — Profile Asset Management (encrypted media, add / finalize parts) / Spotlight
+   publishing (read 17 October 2026)
 7. LinkedIn — Videos API
 8. LinkedIn — Posts API
 9. Tauri — Process Model
