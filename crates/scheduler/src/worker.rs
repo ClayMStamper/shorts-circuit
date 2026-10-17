@@ -8,13 +8,14 @@ use chrono::{DateTime, Utc};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 use shorts_domain::{Job, JobKind, OverduePolicy, PauseReason};
-use shorts_store::{Store, StoreError, StoreResult};
+
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::clock::Clock;
 use crate::handler::{Disposition, JobContext, JobFailure, JobHandler};
+use crate::queue::{JobQueue, QueueError, QueueResult};
 use crate::retry::RetryPolicy;
 
 #[derive(Debug, Clone)]
@@ -51,7 +52,7 @@ impl Default for WorkerConfig {
 
 /// Claims jobs under a lease and runs them through registered [`JobHandler`]s.
 pub struct Worker {
-    store: Store,
+    queue: Arc<dyn JobQueue>,
     config: Mutex<WorkerConfig>,
     clock: Arc<dyn Clock>,
     handlers: HashMap<JobKind, Arc<dyn JobHandler>>,
@@ -61,10 +62,11 @@ pub struct Worker {
 }
 
 impl Worker {
-    pub fn new(store: Store, config: WorkerConfig, clock: Arc<dyn Clock>) -> Self {
+    /// A worker over `queue`: the desktop's SQLite store or the runner's PostgreSQL one.
+    pub fn new(queue: impl JobQueue, config: WorkerConfig, clock: Arc<dyn Clock>) -> Self {
         let owner = format!("{}:{}", config.node, uuid::Uuid::new_v4());
         Self {
-            store,
+            queue: Arc::new(queue),
             config: Mutex::new(config),
             clock,
             handlers: HashMap::new(),
@@ -107,11 +109,10 @@ impl Worker {
     }
 
     /// Startup recovery: requeue jobs left running by an earlier instance of this node.
-    pub async fn recover(&self) -> StoreResult<Vec<Job>> {
+    pub async fn recover(&self) -> QueueResult<Vec<Job>> {
         let node = self.config().node;
         let recovered = self
-            .store
-            .jobs()
+            .queue
             .recover_interrupted(&node, &self.owner, self.clock.now())
             .await?;
         for job in &recovered {
@@ -122,14 +123,14 @@ impl Worker {
 
     /// Claims and processes at most one job. Returns what happened to it, or `None` when
     /// nothing was due (or the lease was lost mid-run).
-    pub async fn run_once(&self) -> StoreResult<Option<(Job, Disposition)>> {
+    pub async fn run_once(&self) -> QueueResult<Option<(Job, Disposition)>> {
         self.run_once_until(&CancellationToken::new()).await
     }
 
     async fn run_once_until(
         &self,
         shutdown: &CancellationToken,
-    ) -> StoreResult<Option<(Job, Disposition)>> {
+    ) -> QueueResult<Option<(Job, Disposition)>> {
         let config = self.config();
         let kinds = self.kinds();
         if kinds.is_empty() {
@@ -137,8 +138,7 @@ impl Worker {
         }
         let ttl = chrono::Duration::from_std(config.lease_ttl).unwrap_or(chrono::Duration::MAX);
         let Some(job) = self
-            .store
-            .jobs()
+            .queue
             .claim_next(&self.owner, self.clock.now(), ttl, &kinds)
             .await?
         else {
@@ -156,7 +156,7 @@ impl Worker {
         job: Job,
         config: &WorkerConfig,
         shutdown: &CancellationToken,
-    ) -> StoreResult<Option<Disposition>> {
+    ) -> QueueResult<Option<Disposition>> {
         let Some(handler) = self.handlers.get(&job.kind()).cloned() else {
             let disposition = Disposition::Failed {
                 message: format!("no handler registered for {}", job.kind()),
@@ -171,7 +171,7 @@ impl Worker {
 
         let cancel = CancellationToken::new();
         let ctx = Arc::new(JobContext::new(
-            self.store.clone(),
+            self.queue.clone(),
             &job,
             self.owner.clone(),
             self.clock.clone(),
@@ -278,16 +278,15 @@ impl Worker {
         job: &Job,
         handler: Option<&Arc<dyn JobHandler>>,
         disposition: Disposition,
-    ) -> StoreResult<Option<Disposition>> {
+    ) -> QueueResult<Option<Disposition>> {
         if let Some(handler) = handler {
             handler.on_settled(job, &disposition).await;
         }
         let owner = self.owner.as_str();
         let now = self.clock.now();
         let result = self
-            .store
-            .jobs()
-            .modify(job.id(), |j| match &disposition {
+            .queue
+            .modify(job.id(), &|j| match &disposition {
                 Disposition::Succeeded => j.succeed(owner, now),
                 Disposition::RetryAt {
                     at,
@@ -319,7 +318,7 @@ impl Worker {
         config: &WorkerConfig,
         cancel: CancellationToken,
     ) -> tokio::task::JoinHandle<()> {
-        let store = self.store.clone();
+        let queue = self.queue.clone();
         let clock = self.clock.clone();
         let owner = self.owner.clone();
         let id = job.id();
@@ -330,7 +329,8 @@ impl Worker {
             ticker.tick().await;
             loop {
                 ticker.tick().await;
-                match store.jobs().renew(id, &owner, clock.now(), ttl).await {
+                let now = clock.now();
+                match queue.modify(id, &|j| j.renew(&owner, now, ttl)).await {
                     Ok(_) => {}
                     Err(e) if e.is_lease_lost() => {
                         cancel.cancel();
@@ -347,13 +347,12 @@ impl Worker {
         let owner = self.owner.as_str();
         let now = self.clock.now();
         match self
-            .store
-            .jobs()
-            .modify(job.id(), |j| j.release(owner, now))
+            .queue
+            .modify(job.id(), &|j| j.release(owner, now))
             .await
         {
             Ok(_) => info!(job = %job.id(), "released job on shutdown"),
-            Err(StoreError::Job(_)) => {}
+            Err(QueueError::Job(_)) => {}
             Err(e) => warn!(job = %job.id(), error = %e, "could not release job"),
         }
     }
@@ -398,7 +397,7 @@ impl Worker {
 
     async fn sleep_for(&self) -> Duration {
         let poll = self.config().poll_interval;
-        let next = match self.store.jobs().next_due_at(&self.kinds()).await {
+        let next = match self.queue.next_due_at(&self.kinds()).await {
             Ok(next) => next,
             Err(_) => return poll,
         };
