@@ -1,0 +1,14 @@
+[package]
+name = "shorts-scheduler"
+description = "Durable job execution: leases, heartbeats, retries with jitter, checkpoints, recovery."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
