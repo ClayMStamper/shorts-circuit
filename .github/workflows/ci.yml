@@ -73,3 +73,11 @@ jobs:
       - run: pnpm build
         working-directory: app
       - run: cargo clippy --manifest-path app/src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+      # The release workflow's script and config aren't exercised until a release; catch typos here.
+      - name: Check release script and config
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/fetch-ffmpeg.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+          Get-Content app/src-tauri/tauri.release.conf.json -Raw | ConvertFrom-Json | Out-Null
