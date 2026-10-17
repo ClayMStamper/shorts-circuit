@@ -224,11 +224,40 @@ Prefer the original export over a video saved back from TikTok, which carries a 
 ## Paid infrastructure
 
 - Domain: OAuth redirects, Google domain verification, privacy-policy hosting.
-- OAuth backend hosting (Axum + Postgres): needed from Increment 1, since Meta and LinkedIn token
-  exchange requires a client secret.
+- OAuth backend hosting (Axum + Postgres): **not needed for publishing to YouTube, Instagram or
+  LinkedIn** (YouTube uses a desktop OAuth client; Instagram and LinkedIn are connected with
+  pasted tokens). Needed for TikTok new-post detection, for a browser sign-in flow if the app is
+  shared with other people, and for cloud mode (posting while the PC is off).
 - Object storage for media staging: not needed for Instagram (the app uploads the file to the
   container directly); possibly for other providers that only fetch a public URL.
 - Code signing: Windows (Azure Trusted Signing or OV cert); Apple Developer Program for macOS.
+  Only needed once the installer goes to other people (see Releases).
+
+## Releases
+
+The **Release** workflow builds an unsigned Windows installer with FFmpeg bundled. What only
+you can do:
+
+- **Run it.** Actions → Release → Run workflow for a test build (download the artifact), or
+  bump `version` in `app/src-tauri/tauri.conf.json` (and `app/package.json`), commit, and push a
+  tag like `v0.2.0` for a draft GitHub release you then publish.
+- **Pin FFmpeg (recommended).** After the first successful run, copy the `SHA-256 OK: …` value
+  from the "Fetch FFmpeg" step into a repository variable `FFMPEG_SHA256` (Settings → Secrets
+  and variables → Actions → Variables). Later runs then refuse any other file.
+- **SmartScreen.** Unsigned installers show "Windows protected your PC" on first run (More
+  info → Run anyway). That's fine for you; for other people, get code signing: Azure Trusted
+  Signing (identity validation, monthly fee) or an OV certificate, then add a `signCommand` to
+  `tauri.release.conf.json` with the credentials as repository secrets.
+- **FFmpeg's license.** The renders use libx264, so the bundled FFmpeg is a GPL build. Shipping
+  it as a separate program next to an MIT app is normal, but the GPL asks you to pass on its
+  license and point to the corresponding source. The installer includes
+  `licenses/FFMPEG-LICENSE.txt` and `licenses/FFMPEG-NOTICE.txt` for that. Decide whether that's
+  enough for how you distribute the app (get advice if you sell it), or ask for an LGPL build
+  that encodes with Windows' own H.264 encoder instead.
+- **Size.** Static FFmpeg builds are large (about 100 MB each for "essentials", over 200 MB
+  for "full"); the installer compresses them.
+- **Updates.** There is no auto-updater yet; install new versions over the old one (your data
+  stays in `%LOCALAPPDATA%`).
 
 ## Legal and review material
 

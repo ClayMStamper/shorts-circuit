@@ -52,6 +52,30 @@ with `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET` and `TIKTOK_REDIRECT_URI`) and 
 started with `SHORTS_BROKER_URL` pointing at it. Without them the feature shows as unavailable;
 see [docs/human-scope.md](docs/human-scope.md) for registering the TikTok developer app.
 
+### Building the Windows installer
+
+The release build bundles `ffmpeg.exe` and `ffprobe.exe` next to the app (Tauri sidecars) and
+produces an NSIS installer that installs for the current user without admin rights.
+
+```powershell
+# FFmpeg for the bundle: download a checked Gyan.dev build, or copy a local one
+./scripts/fetch-ffmpeg.ps1
+./scripts/fetch-ffmpeg.ps1 -FromDir "C:\ffmpeg\bin"
+
+cd app
+pnpm tauri build --config src-tauri/tauri.release.conf.json
+# → app/src-tauri/target/release/bundle/nsis/Shorts Circuit_<version>_x64-setup.exe
+```
+
+The **Release** GitHub workflow does the same on `windows-latest`: run it by hand for a test
+build (the installer is a workflow artifact), or push a tag `v<version>` matching
+`tauri.conf.json` to attach the installer to a draft GitHub release. Builds are unsigned for
+now; see [docs/human-scope.md](docs/human-scope.md) ("Releases").
+
+Keep `@tauri-apps/api` and `@tauri-apps/plugin-dialog` on the same minor version as the `tauri`
+and `tauri-plugin-dialog` crates in `app/src-tauri/Cargo.lock`; `tauri build` refuses to run
+when they differ.
+
 App data (library database, managed originals, render cache, default export folder) lives in the
 platform's local app-data folder, e.g. `%LOCALAPPDATA%\io.github.claymstamper.shorts-circuit`.
 
