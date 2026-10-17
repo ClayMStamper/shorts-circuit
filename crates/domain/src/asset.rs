@@ -172,6 +172,22 @@ impl Asset {
         )
     }
 
+    /// An item noticed on a source platform: it has metadata and maybe a link, but no media yet.
+    pub fn awaiting_media(
+        title: &str,
+        source_url: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<Self, AssetError> {
+        Self::build(
+            title,
+            source_url
+                .map(|u| u.trim().to_owned())
+                .filter(|u| !u.is_empty()),
+            AssetStatus::AwaitingMedia,
+            now,
+        )
+    }
+
     fn build(
         title: &str,
         source_url: Option<String>,

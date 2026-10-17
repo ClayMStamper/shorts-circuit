@@ -33,6 +33,9 @@ pub enum AppError {
     TimeZone(#[from] UnknownTimeZone),
     #[error("{0}")]
     Invalid(String),
+    /// A source connector (TikTok, the OAuth broker) failed.
+    #[error("{0}")]
+    Intake(String),
     #[error("{0} not found")]
     NotFound(String),
     #[error("I/O error: {0}")]
@@ -56,6 +59,7 @@ impl AppError {
             Self::Adapter(_) => "adapter",
             Self::Job(_) => "job",
             Self::Io(_) => "io",
+            Self::Intake(_) => "intake",
         }
     }
 }

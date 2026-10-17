@@ -15,6 +15,7 @@ pub mod platform;
 pub mod publication;
 pub mod recipe;
 pub mod schedule;
+pub mod source;
 pub mod variant;
 
 pub use account::{Capabilities, ConnectedAccount, MissingCapability, NextAction, PublishAccess};
@@ -41,4 +42,5 @@ pub use recipe::{
     RenderRecipe, SubtitleMode, SubtitleTrack, TrimRange,
 };
 pub use schedule::{Schedule, TimeZoneName};
+pub use source::{MatchScore, TikTokPost, match_score, post_title};
 pub use variant::{RenderedOutput, Variant};

@@ -10,15 +10,18 @@
 mod accounts;
 mod app;
 mod collections;
+pub mod credentials;
 mod error;
 mod events;
 mod library;
+mod matching;
 pub mod media;
 mod monitor;
 mod paths;
 mod pipeline;
 mod preferences;
 mod publications;
+pub mod tiktok;
 mod variants;
 pub mod views;
 pub mod watch;

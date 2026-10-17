@@ -31,4 +31,11 @@ pub enum AppEvent {
         asset_id: String,
         message: String,
     },
+    /// The TikTok connector's status changed.
+    TikTokChanged,
+    /// A file might be the original of a pending TikTok post (`asset_id` is the file's asset
+    /// when one import triggered it).
+    MatchSuggested {
+        asset_id: Option<String>,
+    },
 }

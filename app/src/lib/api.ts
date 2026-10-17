@@ -7,10 +7,13 @@ import type {
   AssetDetail,
   AssetSummary,
   AssetUpdate,
+  CheckReport,
   CollectionView,
+  ConnectProgress,
   EditPublication,
   ImportResult,
   LibraryQuery,
+  MatchSuggestion,
   MediaStatus,
   MonitorView,
   NewPublication,
@@ -24,6 +27,7 @@ import type {
   RuleInput,
   ScheduleInput,
   TagCount,
+  TikTokStatus,
   VariantView,
 } from "./types";
 
@@ -111,6 +115,17 @@ export const api = {
   deleteRule: (id: string) => call<CollectionView>("delete_rule", { id }),
   setUnattended: (collectionId: string, accountId: string, enabled: boolean) =>
     call<CollectionView>("set_unattended", { collectionId, accountId, enabled }),
+
+  // TikTok new-post detection and matching
+  tiktokStatus: () => call<TikTokStatus>("tiktok_status"),
+  tiktokSetEnabled: (enabled: boolean) => call<TikTokStatus>("tiktok_set_enabled", { enabled }),
+  tiktokConnect: () => call<void>("tiktok_connect"),
+  tiktokFinishConnect: () => call<ConnectProgress>("tiktok_finish_connect"),
+  tiktokDisconnect: () => call<TikTokStatus>("tiktok_disconnect"),
+  tiktokCheckNow: () => call<CheckReport>("tiktok_check_now"),
+  matchSuggestions: () => call<MatchSuggestion[]>("match_suggestions"),
+  confirmMatch: (videoId: string, assetId: string) => call<AssetSummary>("confirm_match", { videoId, assetId }),
+  dismissMatch: (videoId: string, assetId: string) => call<void>("dismiss_match", { videoId, assetId }),
 
   // Monitor
   monitor: () => call<MonitorView>("monitor"),

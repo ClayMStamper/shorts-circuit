@@ -149,6 +149,12 @@
           </p>
         {:else}
           <div class="placeholder-box">
+            {#if a.sourcePost}
+              <p>
+                Detected on TikTok (posted {new Date(a.sourcePost.postedAt).toLocaleString()}). Save the original file to
+                the watch folder and confirm the match in the library, or attach it here.
+              </p>
+            {/if}
             <p>This item has no video yet.</p>
             <button class="primary" onclick={attachMedia}>Attach video…</button>
           </div>

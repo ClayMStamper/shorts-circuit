@@ -4,11 +4,13 @@
 //! tokens ever cross into the webview.
 
 mod commands;
+mod keyring_store;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use shorts_adapters::AdapterRegistry;
+use shorts_desktop::tiktok::{TikTokIntake, TikTokSetup};
 use shorts_desktop::watch::{WatchConfig, WatchFolder};
 use shorts_desktop::{App, AppPaths, FfmpegBackend};
 use shorts_media::{MediaTools, RenderCache, Renderer};
@@ -30,6 +32,8 @@ pub struct MediaStatus {
 pub struct Shell {
     pub app: Arc<App>,
     pub media: MediaStatus,
+    /// Optional TikTok new-post detection; unavailable unless `SHORTS_BROKER_URL` is set.
+    pub tiktok: Arc<TikTokIntake>,
     watch: Mutex<Option<WatchFolder>>,
     shutdown: CancellationToken,
 }
@@ -109,9 +113,16 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
     let shutdown = CancellationToken::new();
     app.start_worker(WorkerConfig::default(), shutdown.clone())
         .await?;
+    let tiktok = TikTokIntake::new(
+        app.clone(),
+        TikTokSetup::from_env(),
+        Arc::new(keyring_store::KeyringCredentials),
+    );
+    tauri::async_runtime::spawn(tiktok.clone().run(shutdown.clone()));
     Ok(Shell {
         app,
         media,
+        tiktok,
         watch: Mutex::new(None),
         shutdown,
     })
@@ -196,6 +207,15 @@ pub fn run() {
             commands::update_rule,
             commands::delete_rule,
             commands::set_unattended,
+            commands::tiktok_status,
+            commands::tiktok_set_enabled,
+            commands::tiktok_connect,
+            commands::tiktok_finish_connect,
+            commands::tiktok_disconnect,
+            commands::tiktok_check_now,
+            commands::match_suggestions,
+            commands::confirm_match,
+            commands::dismiss_match,
             commands::monitor,
             commands::retry_job,
             commands::cancel_job,

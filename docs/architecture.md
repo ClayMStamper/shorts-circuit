@@ -42,7 +42,7 @@ application lacks API access.
 
 | Platform | Integration and design consequence |
 |---|---|
-| TikTok (source) | The Display API provides metadata, share links, and embeds, but no source-video download field. Import original files or authorized exports; a saved TikTok URL can remain a library item awaiting media. oEmbed covers link metadata without auth. |
+| TikTok (source) | The Display API provides metadata, share links, and embeds, but no source-video download field. Import original files or authorized exports; a saved TikTok URL can remain a library item awaiting media. oEmbed covers link metadata without auth. The optional new-post detector (below) uses only `user.info.basic` and `video.list`. |
 | YouTube Shorts | Upload through the YouTube Data API using resumable uploads. Validate the asset against Shorts format rules; uploading a video and being classified as a Short are distinct concerns. |
 | Instagram Reels | Professional accounts publish through a media-container workflow (Instagram Login, no linked Facebook Page needed). Model container creation, processing, and publication as separate steps. |
 | Snapchat Spotlight | The Public Profile API supports Spotlight publication but requires application allowlisting. Verify access before enabling automation; otherwise offer export and manual handoff. |
@@ -95,6 +95,25 @@ As implemented (Increment 2):
 
 Approval binds to an **immutable publication revision**. Any change to approved media, copy, or
 destination invalidates that approval and returns the publication to review.
+
+### Automatic intake
+
+Originals come in through the watch folder, typically a folder the phone or editor syncs to.
+TikTok is used at most to notice that a post exists:
+
+- **New-post detection** (optional, off by default, behind a setting). A poller in the desktop
+  app calls the Display API with a token obtained through the OAuth broker, which holds the
+  TikTok client secret and does code exchange, refresh and revoke. The desktop starts sign-in
+  at `<broker>/v1/tiktok/connect?state&challenge` and collects tokens from `/v1/tiktok/claim`
+  with the verifier behind the challenge. Tokens are kept in the OS credential store.
+- Each new post becomes an asset awaiting media with title, caption, share URL, post time,
+  duration and a cached copy of the cover image (`tiktok_posts`). Nothing else is downloaded.
+- When a file is imported, files whose duration is within 1.5 s of a pending post and that
+  arrived within 72 hours of it are suggested as its original. Only the user's confirmation
+  merges them: the file's asset takes the post's details and collections (so rules fire) and
+  the placeholder is removed. Dismissed pairs aren't suggested again.
+- Without a configured TikTok developer app the feature reports itself unavailable with the
+  next step (see `docs/human-scope.md`).
 
 ### Media pipeline
 

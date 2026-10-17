@@ -4,9 +4,10 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use shorts_desktop::tiktok::{CheckReport, ConnectProgress, TikTokStatus};
 use shorts_desktop::views::{
-    AccountView, AssetDetail, AssetSummary, CollectionView, MonitorView, PublicationView,
-    ReviewView, TagCount, VariantView,
+    AccountView, AssetDetail, AssetSummary, CollectionView, MatchSuggestion, MonitorView,
+    PublicationView, ReviewView, TagCount, VariantView,
 };
 use shorts_desktop::{
     AppError, AssetUpdate, EditPublication, ImportOutcome, LibraryQuery, NewPublication,
@@ -362,6 +363,66 @@ pub async fn set_unattended(
 }
 
 #[tauri::command]
+pub async fn tiktok_status(shell: State<'_, Shell>) -> Result<TikTokStatus> {
+    shell.tiktok.status().await
+}
+
+#[tauri::command]
+pub async fn tiktok_set_enabled(shell: State<'_, Shell>, enabled: bool) -> Result<TikTokStatus> {
+    shell.tiktok.set_enabled(enabled).await
+}
+
+/// Opens the broker's sign-in page in the default browser. The UI then calls
+/// `tiktok_finish_connect` until it stops reporting `pending`.
+#[tauri::command]
+pub async fn tiktok_connect(shell: State<'_, Shell>) -> Result<()> {
+    let url = shell.tiktok.begin_connect().await?;
+    if !matches!(url.scheme(), "https" | "http") {
+        return Err(AppError::Invalid("the broker URL must be http(s)".into()));
+    }
+    open_external(url.as_str())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn tiktok_finish_connect(shell: State<'_, Shell>) -> Result<ConnectProgress> {
+    shell.tiktok.finish_connect().await
+}
+
+#[tauri::command]
+pub async fn tiktok_disconnect(shell: State<'_, Shell>) -> Result<TikTokStatus> {
+    shell.tiktok.disconnect().await
+}
+
+#[tauri::command]
+pub async fn tiktok_check_now(shell: State<'_, Shell>) -> Result<CheckReport> {
+    shell.tiktok.check_now().await
+}
+
+#[tauri::command]
+pub async fn match_suggestions(shell: State<'_, Shell>) -> Result<Vec<MatchSuggestion>> {
+    shell.app.match_suggestions().await
+}
+
+#[tauri::command]
+pub async fn confirm_match(
+    shell: State<'_, Shell>,
+    video_id: String,
+    asset_id: AssetId,
+) -> Result<AssetSummary> {
+    shell.app.confirm_match(&video_id, asset_id).await
+}
+
+#[tauri::command]
+pub async fn dismiss_match(
+    shell: State<'_, Shell>,
+    video_id: String,
+    asset_id: AssetId,
+) -> Result<()> {
+    shell.app.dismiss_match(&video_id, asset_id).await
+}
+
+#[tauri::command]
 pub async fn monitor(shell: State<'_, Shell>) -> Result<MonitorView> {
     shell.app.monitor().await
 }
@@ -422,16 +483,25 @@ pub async fn open_folder(shell: State<'_, Shell>, path: String) -> Result<()> {
             "only export package folders can be opened".into(),
         ));
     }
-    let program = if cfg!(windows) {
+    std::process::Command::new(opener())
+        .arg(display_path(&canonical))
+        .spawn()?;
+    Ok(())
+}
+
+fn opener() -> &'static str {
+    if cfg!(windows) {
         "explorer"
     } else if cfg!(target_os = "macos") {
         "open"
     } else {
         "xdg-open"
-    };
-    std::process::Command::new(program)
-        .arg(display_path(&canonical))
-        .spawn()?;
+    }
+}
+
+/// Opens a web page in the default browser. The URL is one argument, never shell-parsed.
+fn open_external(url: &str) -> Result<()> {
+    std::process::Command::new(opener()).arg(url).spawn()?;
     Ok(())
 }
 

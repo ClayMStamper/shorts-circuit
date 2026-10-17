@@ -185,6 +185,9 @@ impl App {
     pub async fn import_watched(&self, path: &Path) -> AppResult<ImportOutcome> {
         let outcome = self.import_file(path, None).await?;
         self.route_watched(outcome.asset_id()).await;
+        if let ImportOutcome::Imported { asset_id } = outcome {
+            self.suggest_matches_for(asset_id).await;
+        }
         Ok(outcome)
     }
 
@@ -327,6 +330,13 @@ impl App {
             created_at: asset.created_at,
             media,
             publication_count,
+            source_post: self
+                .store
+                .tiktok_posts()
+                .for_asset(asset.id)
+                .await?
+                .as_ref()
+                .map(crate::views::SourcePostView::from),
         })
     }
 
@@ -411,7 +421,8 @@ impl App {
             .collect())
     }
 
-    /// A poster frame for the asset (generated on first request), or `None` without media.
+    /// A poster frame for the asset (generated on first request); for a TikTok post still
+    /// waiting for its file, the saved cover; otherwise `None`.
     pub async fn thumbnail(&self, id: AssetId) -> AppResult<Option<PathBuf>> {
         let Some(media) = self
             .store
@@ -421,7 +432,15 @@ impl App {
             .into_iter()
             .next()
         else {
-            return Ok(None);
+            let cover = self
+                .store
+                .tiktok_posts()
+                .for_asset(id)
+                .await?
+                .and_then(|p| p.cover_path)
+                .map(PathBuf::from)
+                .filter(|p| p.is_file());
+            return Ok(cover);
         };
         let at_ms = (media.properties.duration_ms / 10).min(1_000);
         Ok(Some(self.media.thumbnail(&media, at_ms).await?))

@@ -55,6 +55,9 @@
       case "rulesFailed":
         toast(`Collection rules: ${event.message}`, "bad");
         break;
+      case "matchSuggested":
+        toast("A new file may be the original of a TikTok post; check the library.", "info");
+        break;
       case "renderProgress":
         return;
     }
@@ -113,7 +116,7 @@
     {:else if route.view === "collections"}
       <Collections {revision} />
     {:else}
-      <Settings />
+      <Settings {revision} />
     {/if}
   </main>
 

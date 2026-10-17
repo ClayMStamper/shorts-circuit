@@ -3,6 +3,7 @@
   import { formatDuration } from "../lib/format";
   import { fileUrl, pickFiles, VIDEO_EXTENSIONS } from "../lib/tauri";
   import type { AssetSummary, TagCount } from "../lib/types";
+  import MatchSuggestions from "./MatchSuggestions.svelte";
   import Stars from "./Stars.svelte";
   import { errorToast, toast } from "./Toasts.svelte";
 
@@ -37,7 +38,7 @@
       assets = list;
       tags = counts;
       for (const a of list) {
-        if (a.media && !thumbs[a.id]) {
+        if ((a.media || a.sourcePost?.coverPath) && !thumbs[a.id]) {
           api
             .thumbnail(a.id)
             .then((path) => {
@@ -109,6 +110,8 @@
     </div>
   {/if}
 
+  <MatchSuggestions {revision} {onOpen} />
+
   <form class="link-form" onsubmit={saveLink}>
     <input type="url" placeholder="Save a link (e.g. a TikTok URL) to import its video later" bind:value={linkUrl} required />
     <input type="text" placeholder="Title (optional)" bind:value={linkTitle} />
@@ -132,6 +135,7 @@
             {:else}
               <span class="placeholder">{a.status === "awaiting_media" ? "Awaiting media" : "…"}</span>
             {/if}
+            {#if a.status === "awaiting_media" && a.sourcePost}<span class="duration">TikTok · awaiting file</span>{/if}
             {#if a.media}<span class="duration">{formatDuration(a.media.properties.duration_ms)}</span>{/if}
           </div>
           <div class="meta">

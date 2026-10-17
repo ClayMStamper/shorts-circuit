@@ -17,9 +17,9 @@ crates/
   store/       SQLite persistence (SQLx, migrations, WAL)
   media/       FFprobe inspection, render recipes, FFmpeg rendering and cache
   scheduler/   durable jobs: leases, heartbeats, retries, checkpoints, recovery
-  adapters/    platform adapter contract, manual-handoff exporter (provider adapters later)
+  adapters/    platform adapter contract, manual-handoff exporter, TikTok Display API and broker clients
   desktop/     application services behind the UI: import, library, review, scheduling, job handlers
-  backend/     Axum OAuth broker and (later) cloud runner
+  backend/     Axum OAuth broker (TikTok code exchange and refresh) and (later) cloud runner
 app/           Svelte + TypeScript frontend (pnpm)
 app/src-tauri/ Tauri 2 shell (separate Cargo workspace; needs the platform WebView)
 ```
@@ -46,6 +46,11 @@ pnpm tauri dev
 FFmpeg is found in this order: `SHORTS_FFMPEG` / `SHORTS_FFPROBE`, `ffmpeg(.exe)` / `ffprobe(.exe)`
 next to the app executable (where a packaged build should ship them), then `PATH`. When it is
 missing the app still starts and shows a banner.
+
+Optional TikTok new-post detection needs the OAuth broker (`cargo run -p shorts-backend`, configured
+with `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET` and `TIKTOK_REDIRECT_URI`) and the desktop app
+started with `SHORTS_BROKER_URL` pointing at it. Without them the feature shows as unavailable;
+see [docs/human-scope.md](docs/human-scope.md) for registering the TikTok developer app.
 
 App data (library database, managed originals, render cache, default export folder) lives in the
 platform's local app-data folder, e.g. `%LOCALAPPDATA%\io.github.claymstamper.shorts-circuit`.

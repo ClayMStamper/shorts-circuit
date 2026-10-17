@@ -142,6 +142,11 @@ export function formatInZone(iso: string, timeZone: string): string {
   }).format(new Date(iso));
 }
 
+/** An instant in the computer's timezone. */
+export function formatDateTime(iso: string): string {
+  return formatInZone(iso, systemTimeZone());
+}
+
 /** Splits free text into hashtags: `#a b, c` becomes `["a", "b", "c"]`. */
 export function parseHashtags(input: string): string[] {
   const seen = new Set<string>();

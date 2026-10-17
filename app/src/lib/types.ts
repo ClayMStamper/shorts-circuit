@@ -131,6 +131,60 @@ export interface AssetSummary {
   createdAt: string;
   media: MediaView | null;
   publicationCount: number;
+  /** The TikTok post this item came from (new-post detection). */
+  sourcePost: SourcePostView | null;
+}
+
+export interface SourcePostView {
+  videoId: string;
+  title: string;
+  caption: string;
+  postedAt: string;
+  durationMs: number | null;
+  shareUrl: string | null;
+  coverPath: string | null;
+  matched: boolean;
+}
+
+export interface MatchCandidateView {
+  assetId: string;
+  title: string;
+  originalName: string;
+  importedAt: string;
+  durationMs: number;
+}
+
+export interface MatchSuggestion {
+  postAssetId: string;
+  post: SourcePostView;
+  candidate: MatchCandidateView;
+  durationDiffMs: number;
+  hoursApart: number;
+}
+
+export type TikTokStatus =
+  | { kind: "unavailable"; reason: string; nextStep: string }
+  | { kind: "off" }
+  | { kind: "notConnected" }
+  | { kind: "connecting" }
+  | {
+      kind: "connected";
+      displayName: string;
+      connectedAt: string;
+      lastCheckedAt: string | null;
+      lastError: string | null;
+      pendingPosts: number;
+    }
+  | { kind: "reconnect"; displayName: string; message: string };
+
+export type ConnectProgress =
+  | { kind: "pending" }
+  | { kind: "connected"; status: TikTokStatus }
+  | { kind: "failed"; message: string };
+
+export interface CheckReport {
+  newPosts: number;
+  suggestions: number;
 }
 
 export interface RenderedView {
@@ -338,7 +392,9 @@ export type AppEvent =
   | { type: "renderProgress"; variantId: string; fraction: number }
   | { type: "watchFolderError"; message: string }
   | { type: "collectionsChanged" }
-  | { type: "rulesFailed"; assetId: string; message: string };
+  | { type: "rulesFailed"; assetId: string; message: string }
+  | { type: "tikTokChanged" }
+  | { type: "matchSuggested"; assetId: string | null };
 
 export interface CollectionRef {
   id: string;

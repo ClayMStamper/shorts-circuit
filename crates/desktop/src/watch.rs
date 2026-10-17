@@ -217,6 +217,7 @@ async fn import(app: &App, path: &Path, seen: &mut BTreeMap<String, Seen>) {
     // between at worst routes the same asset again on the next start.
     if let Some(asset_id) = imported {
         app.route_watched(asset_id).await;
+        app.suggest_matches_for(asset_id).await;
     }
 }
 

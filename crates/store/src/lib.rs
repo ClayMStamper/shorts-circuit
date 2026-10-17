@@ -13,6 +13,7 @@ mod jobs;
 mod media_files;
 mod publications;
 mod settings;
+mod tiktok;
 mod variants;
 
 use std::path::Path;
@@ -31,6 +32,7 @@ pub use jobs::{JobFilter, Jobs};
 pub use media_files::MediaFiles;
 pub use publications::{PublicationFilter, PublicationLogEntry, Publications};
 pub use settings::Settings;
+pub use tiktok::TikTokPosts;
 pub use variants::Variants;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
@@ -160,6 +162,10 @@ impl Store {
         Collections::new(&self.pool)
     }
 
+    pub fn tiktok_posts(&self) -> TikTokPosts<'_> {
+        TikTokPosts::new(&self.pool)
+    }
+
     pub fn settings(&self) -> Settings<'_> {
         Settings::new(&self.pool)
     }
@@ -181,6 +187,44 @@ impl Store {
         }
         media_files::insert_media_file(&mut tx, media).await?;
         variants::insert_variant(&mut tx, variant).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Records a newly noticed TikTok post with its awaiting-media item. Returns false, writing
+    /// nothing, when the post is already known.
+    pub async fn record_tiktok_post(
+        &self,
+        asset: &shorts_domain::Asset,
+        post: &shorts_domain::TikTokPost,
+    ) -> StoreResult<bool> {
+        if post.asset_id != asset.id {
+            return Err(StoreError::Corrupt(
+                "TikTok post does not match its item".into(),
+            ));
+        }
+        let mut tx = self.pool.begin().await?;
+        assets::insert_asset(&mut tx, asset).await?;
+        if !tiktok::insert_post(&mut tx, post).await? {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    /// Confirms that `target` holds the original of TikTok post `video_id`: `target` (already
+    /// carrying the post's details) takes over the post and the awaiting item's collections,
+    /// and the awaiting item is removed. All or nothing.
+    pub async fn merge_tiktok_match(
+        &self,
+        video_id: &str,
+        awaiting: shorts_domain::AssetId,
+        target: &shorts_domain::Asset,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> StoreResult<()> {
+        let mut tx = self.pool.begin().await?;
+        tiktok::merge(&mut tx, video_id, awaiting, target, at).await?;
         tx.commit().await?;
         Ok(())
     }

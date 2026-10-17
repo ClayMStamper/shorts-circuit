@@ -14,6 +14,9 @@
     type Weekday,
   } from "../lib/types";
   import { errorToast, toast } from "./Toasts.svelte";
+  import TikTokSettings from "./TikTokSettings.svelte";
+
+  let { revision = 0 }: { revision?: number } = $props();
 
   let prefs = $state<Preferences | null>(null);
   let accounts = $state<AccountView[]>([]);
@@ -182,6 +185,8 @@
         {#if prefs.exportDir}<button onclick={() => update({ exportDir: null })}>Use default</button>{/if}
       </p>
     </fieldset>
+
+    <TikTokSettings {revision} />
 
     <fieldset>
       <legend>Destination accounts</legend>

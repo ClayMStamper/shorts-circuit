@@ -23,6 +23,45 @@ pub struct AssetSummary {
     pub created_at: DateTime<Utc>,
     pub media: Option<MediaView>,
     pub publication_count: usize,
+    /// The TikTok post this item came from, when it was detected through the connector.
+    pub source_post: Option<SourcePostView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourcePostView {
+    pub video_id: String,
+    pub title: String,
+    pub caption: String,
+    pub posted_at: DateTime<Utc>,
+    pub duration_ms: Option<u64>,
+    pub share_url: Option<String>,
+    /// Local copy of the cover image.
+    pub cover_path: Option<String>,
+    /// Matched to its original file.
+    pub matched: bool,
+}
+
+/// "This imported file may be the original of that TikTok post." Confirm or dismiss.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchSuggestion {
+    /// The awaiting-media item for the post.
+    pub post_asset_id: String,
+    pub post: SourcePostView,
+    pub candidate: MatchCandidateView,
+    pub duration_diff_ms: u64,
+    pub hours_apart: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchCandidateView {
+    pub asset_id: String,
+    pub title: String,
+    pub original_name: String,
+    pub imported_at: DateTime<Utc>,
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

@@ -10,7 +10,7 @@ use shorts_domain::{
     Destination, Job, JobKind, JobState, MediaFile, MediaFileId, MediaProperties, OverduePolicy,
     PermissionStatus, Platform, Publication, PublicationEvent, PublicationState, PublishAttempt,
     Rating, RenderRecipe, RevisionContent, RuleFiring, RuleId, RuleOutput, RuleSpec, Schedule, Tag,
-    TimeZoneName, UnattendedGrant, Variant,
+    TikTokPost, TimeZoneName, UnattendedGrant, Variant,
 };
 use shorts_store::{AssetFilter, JobFilter, PublicationFilter, Store, StoreError};
 use tempfile::TempDir;
@@ -1009,4 +1009,105 @@ async fn a_rule_fires_once_per_asset_and_account() {
         .unwrap()
         .unwrap();
     assert_eq!(stored.auto_approved_at, Some(t0()));
+}
+
+fn tiktok_post(asset: &Asset, video_id: &str) -> TikTokPost {
+    TikTokPost {
+        video_id: video_id.into(),
+        asset_id: asset.id,
+        posted_at: t0(),
+        duration_ms: Some(20_000),
+        title: asset.title.clone(),
+        caption: "caption #bread".into(),
+        share_url: Some(format!("https://www.tiktok.com/@test/video/{video_id}")),
+        cover_url: None,
+        cover_path: None,
+        discovered_at: t0(),
+        matched_at: None,
+    }
+}
+
+#[tokio::test]
+async fn tiktok_posts_are_recorded_once_and_merged_into_the_imported_file() {
+    let (_dir, store) = store().await;
+    let item = Asset::awaiting_media("Bagels", Some("https://www.tiktok.com/@test/video/1"), t0())
+        .unwrap();
+    let post = tiktok_post(&item, "1");
+    assert!(store.record_tiktok_post(&item, &post).await.unwrap());
+    // The same post again writes nothing (not even a second item).
+    let again = Asset::awaiting_media("Bagels", None, t0()).unwrap();
+    assert!(
+        !store
+            .record_tiktok_post(&again, &tiktok_post(&again, "1"))
+            .await
+            .unwrap()
+    );
+    assert!(store.assets().get(again.id).await.unwrap().is_none());
+    assert_eq!(
+        store.tiktok_posts().pending().await.unwrap(),
+        vec![post.clone()]
+    );
+
+    let c = Collection::new("Phone", t0()).unwrap();
+    store.collections().insert(&c).await.unwrap();
+    store
+        .collections()
+        .add_member(c.id, item.id, t0())
+        .await
+        .unwrap();
+
+    // Refused while the "awaiting" item actually has media.
+    let f = fixture(&store, 50).await;
+    assert!(
+        store
+            .merge_tiktok_match("1", f.asset.id, &f.asset, t0())
+            .await
+            .is_err()
+    );
+
+    let mut target = f.asset.clone();
+    target.title = "Bagels".into();
+    store
+        .merge_tiktok_match("1", item.id, &target, t0())
+        .await
+        .unwrap();
+    assert!(store.assets().get(item.id).await.unwrap().is_none());
+    assert_eq!(
+        store.assets().require(f.asset.id).await.unwrap().title,
+        "Bagels"
+    );
+    let moved = store.tiktok_posts().require("1").await.unwrap();
+    assert_eq!(moved.asset_id, f.asset.id);
+    assert_eq!(moved.matched_at, Some(t0()));
+    assert!(store.tiktok_posts().pending().await.unwrap().is_empty());
+    assert_eq!(
+        store.collections().members(c.id).await.unwrap(),
+        vec![f.asset.id]
+    );
+    assert!(
+        store
+            .tiktok_posts()
+            .linked_assets()
+            .await
+            .unwrap()
+            .contains(&f.asset.id)
+    );
+
+    store
+        .tiktok_posts()
+        .dismiss("1", f.asset.id, t0())
+        .await
+        .unwrap();
+    store
+        .tiktok_posts()
+        .dismiss("1", f.asset.id, t0())
+        .await
+        .unwrap();
+    assert_eq!(store.tiktok_posts().dismissed().await.unwrap().len(), 1);
+    let window = store
+        .media_files()
+        .imported_between(t0() - Duration::hours(1), t0() + Duration::hours(1))
+        .await
+        .unwrap();
+    assert_eq!(window.len(), 1);
 }
