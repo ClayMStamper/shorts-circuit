@@ -81,6 +81,9 @@ Prefer the original export over a video saved back from TikTok, which carries a 
 
 ## Open decisions
 
-- LinkedIn: member, organization, or both.
+- ~~LinkedIn: member, organization, or both.~~ **Resolved (October 2026): the organization
+  (Company) page**, posted through the Community Management API on its own dedicated LinkedIn
+  app. Organization is the default LinkedIn destination type; member posting isn't planned. (A
+  Repurpose.io screenshot that showed the personal profile was misleading.)
 - Default overdue-job policy: catch up or expire.
 - Personal use vs distribution to others (drives signing, legal, and review depth).
