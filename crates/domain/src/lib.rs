@@ -11,6 +11,7 @@ pub mod collection;
 pub mod ids;
 pub mod instagram;
 pub mod job;
+pub mod linkedin;
 pub mod media;
 pub mod platform;
 pub mod publication;

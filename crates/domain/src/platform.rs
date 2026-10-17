@@ -2,14 +2,16 @@
 //!
 //! The limits below are meant for early warnings in review; each adapter re-validates against
 //! the provider's current rules. YouTube's come from [`crate::youtube`], checked against
-//! Google's docs in October 2026, and Instagram's from [`crate::instagram`]; the others are as
-//! understood in mid-2026 and still need confirming (see `docs/human-scope.md`).
+//! Google's docs in October 2026, Instagram's from [`crate::instagram`] and LinkedIn's from
+//! [`crate::linkedin`]; Snapchat's are as understood in mid-2026 and still need confirming (see
+//! `docs/human-scope.md`).
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use crate::instagram;
+use crate::linkedin;
 use crate::media::MediaProperties;
 use crate::youtube;
 
@@ -79,12 +81,12 @@ impl Platform {
                 max_hashtags: 10,
             },
             Self::Linkedin => MediaRequirements {
-                min_duration_ms: 3_000,
-                max_duration_ms: 30 * 60_000,
-                max_file_bytes: 500 * 1024 * 1024,
+                min_duration_ms: linkedin::MIN_DURATION_MS,
+                max_duration_ms: linkedin::MAX_DURATION_MS,
+                max_file_bytes: linkedin::MAX_FILE_BYTES,
                 require_vertical_or_square: false,
-                max_caption_chars: 3_000,
-                max_hashtags: 30,
+                max_caption_chars: linkedin::COMMENTARY_MAX_CHARS,
+                max_hashtags: linkedin::MAX_HASHTAGS,
             },
         }
     }
