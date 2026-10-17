@@ -1120,3 +1120,26 @@ async fn tiktok_posts_are_recorded_once_and_merged_into_the_imported_file() {
         .unwrap();
     assert_eq!(window.len(), 1);
 }
+
+#[tokio::test]
+async fn quota_spend_accumulates_per_bucket_and_day() {
+    let (_dir, store) = store().await;
+    let q = store.quota();
+    let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+    let next = day.succ_opt().unwrap();
+    assert_eq!(q.used("youtube:units", day).await.unwrap(), 0);
+    assert_eq!(q.spend("youtube:units", day, 1).await.unwrap(), 1);
+    assert_eq!(q.spend("youtube:units", day, 2).await.unwrap(), 3);
+    assert_eq!(q.spend("youtube:uploads", day, 1).await.unwrap(), 1);
+    assert_eq!(q.spend("youtube:units", next, 5).await.unwrap(), 5);
+    assert_eq!(q.used("youtube:units", day).await.unwrap(), 3);
+
+    q.exhaust("youtube:units", day, 10_000).await.unwrap();
+    assert_eq!(q.used("youtube:units", day).await.unwrap(), 10_000);
+    // Exhausting never lowers a count.
+    q.exhaust("youtube:units", day, 50).await.unwrap();
+    assert_eq!(q.used("youtube:units", day).await.unwrap(), 10_000);
+
+    assert_eq!(q.prune_before(next).await.unwrap(), 2);
+    assert_eq!(q.used("youtube:units", next).await.unwrap(), 5);
+}

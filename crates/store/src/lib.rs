@@ -12,6 +12,7 @@ mod collections;
 mod jobs;
 mod media_files;
 mod publications;
+mod quota;
 mod settings;
 mod tiktok;
 mod variants;
@@ -31,6 +32,7 @@ pub use collections::{CollectionSummary, Collections};
 pub use jobs::{JobFilter, Jobs};
 pub use media_files::MediaFiles;
 pub use publications::{PublicationFilter, PublicationLogEntry, Publications};
+pub use quota::Quota;
 pub use settings::Settings;
 pub use tiktok::TikTokPosts;
 pub use variants::Variants;
@@ -164,6 +166,10 @@ impl Store {
 
     pub fn tiktok_posts(&self) -> TikTokPosts<'_> {
         TikTokPosts::new(&self.pool)
+    }
+
+    pub fn quota(&self) -> Quota<'_> {
+        Quota::new(&self.pool)
     }
 
     pub fn settings(&self) -> Settings<'_> {
