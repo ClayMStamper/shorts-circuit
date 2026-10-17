@@ -43,7 +43,7 @@ application lacks API access.
 | Platform | Integration and design consequence |
 |---|---|
 | TikTok (source) | The Display API provides metadata, share links, and embeds, but no source-video download field. Import original files or authorized exports; a saved TikTok URL can remain a library item awaiting media. oEmbed covers link metadata without auth. The optional new-post detector (below) uses only `user.info.basic` and `video.list`. |
-| YouTube Shorts | Upload through the YouTube Data API using resumable uploads. Validate the asset against Shorts format rules; uploading a video and being classified as a Short are distinct concerns. |
+| YouTube Shorts | Upload through the YouTube Data API using resumable uploads. Validate the asset against Shorts format rules; uploading a video and being classified as a Short are distinct concerns. Implemented first (Increment 3, below). |
 | Instagram Reels | Professional accounts publish through a media-container workflow (Instagram Login, no linked Facebook Page needed). Model container creation, processing, and publication as separate steps. |
 | Snapchat Spotlight | The Public Profile API supports Spotlight publication but requires application allowlisting. Verify access before enabling automation; otherwise offer export and manual handoff. |
 | LinkedIn | Upload media through the Videos API, then reference it in a Posts API request. Check member vs organization permissions. Feed placement is outside the app's control. |
@@ -218,8 +218,47 @@ publish are separate operations so interrupted work resumes at the correct step.
 - Browser-based authorization, state validation, and PKCE where supported.
 - The backend protects confidential OAuth client secrets. No shared secrets in the desktop binary;
   no tokens in the webview.
+- Exception: Google issues installed-app ("Desktop app") clients whose secret is explicitly not
+  confidential. The owner creates their own and pastes it into the app; the desktop does the
+  loopback sign-in and token refresh with Google directly, and keeps the client and refresh
+  tokens in the OS credential store.
 - For providers that fetch a video URL, stage only the required variant at an unguessable HTTPS URL,
   keep it through processing and retries, then delete it under a defined retention policy.
+
+### YouTube Shorts connector (Increment 3, first slice)
+
+- **Sign-in.** Google's installed-app flow: the desktop listens on `http://127.0.0.1:<random
+  port>`, opens the consent page with PKCE (S256), a random `state`, `access_type=offline` and
+  `prompt=consent`, ignores loopback requests with any other state, and exchanges the code for
+  tokens. Scopes: `youtube.upload` and `youtube.readonly`. The owner's OAuth client and each
+  channel's refresh token and channel id live in the OS credential store
+  (`google_oauth_client`, `youtube:<account id>`); SQLite holds only the account, its capability
+  record and a non-secret status record. Access tokens stay in memory.
+- **Capabilities.** A connected channel publishes automatically with `private_only` set until
+  the owner says the project passed YouTube's audit; the record carries plain-language notes
+  (visibility, quota, 7-day sign-in in Testing). A refused refresh (`invalid_grant`) moves the
+  publication to `NeedsAuthentication` with a Reconnect action; reconnecting resumes it.
+  Disconnecting revokes the grant and leaves the destination on export packages.
+- **Upload.** Resumable `videos.insert` with title, description, tags (including a marker tag
+  derived from the publication id and revision), privacy (private while `private_only`, else
+  public) and `selfDeclaredMadeForKids: false`. Chunks are 8 MiB. The checkpoint holds the
+  session URL and confirmed offset; a new process, or any failed chunk, asks the session
+  (`Content-Range: bytes */N`) before sending more, so a restart resumes mid-file and a lost
+  final response is read back. An expired session is searched for by the marker among recent
+  uploads before a new session is opened.
+- **Processing and publish.** `videos.list` (`status`, `processingDetails`) until processed or
+  failed. Privacy is fixed at upload time (the narrow scope can't change it later), so publish
+  confirms the video and records its URL (`youtube.com/shorts/<id>`) with a note if it is
+  private. Reconcile looks the video up by id (or by session and marker when no id was
+  recorded) and otherwise leaves the outcome to the user.
+- **Quota.** Spend is recorded per bucket (`youtube:uploads`, `youtube:units`) and Pacific-time
+  day. A call that would exceed the limits (or an upload without enough units left to watch it
+  process) waits until midnight Pacific; so does a `quotaExceeded` answer, which also marks the
+  day as used up. `rateLimitExceeded` waits a minute or `Retry-After`. Rate-limit waits don't
+  count against the retry budget.
+- **Limits** (`shorts_domain::youtube`): Shorts up to 3 minutes, square or vertical; files up to
+  256 GB in a supported container; title ≤ 100 characters and description ≤ 5,000 bytes, without
+  `<` or `>`.
 
 ## Delivery plan
 
@@ -236,10 +275,11 @@ Exercise interrupted uploads, revoked credentials, rate limiting, lost publish r
 daylight-saving transitions, and partial campaign success. Every failure must leave a clear status
 and a safe recovery action.
 
-## Primary sources (checked 16 October 2026)
+## Primary sources (checked 16 October 2026; YouTube and Google OAuth rechecked 17 October 2026)
 
 1. TikTok — Video Object
-2. YouTube Data API — Videos: insert
+2. YouTube Data API — Videos: insert; Resumable uploads; Errors; Quota costs; Revision history
+   (granular quota buckets, June 2026)
 3. YouTube Help — Understand three-minute Shorts
 4. Meta — Instagram API documentation (official Postman collection)
 5. Snap — Public Profile API: Get Started
@@ -247,3 +287,5 @@ and a safe recovery action.
 7. LinkedIn — Videos API
 8. LinkedIn — Posts API
 9. Tauri — Process Model
+10. Google Identity — OAuth 2.0 for iOS & Desktop Apps (loopback redirect, PKCE; 7-day refresh
+    tokens for External apps in Testing)
