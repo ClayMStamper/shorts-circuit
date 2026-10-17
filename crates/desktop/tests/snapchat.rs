@@ -73,7 +73,7 @@ impl World {
         Mock::given(method("POST"))
             .and(path("/token"))
             .and(body_string_contains("grant_type=authorization_code"))
-            .and(body_string_contains(&format!(
+            .and(body_string_contains(format!(
                 "client_secret={CLIENT_SECRET}"
             )))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
