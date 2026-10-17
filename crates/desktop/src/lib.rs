@@ -4,7 +4,8 @@
 //! variants, prepares publications for review, schedules them, and registers the job handlers
 //! that render variants and take approved publications through the publish pipeline (manual
 //! handoff, or a platform adapter once an account is connected through
-//! [`youtube::YouTubeConnector`] or [`instagram::InstagramConnector`]). Everything the UI shows comes back as the serializable views
+//! [`youtube::YouTubeConnector`], [`instagram::InstagramConnector`] or
+//! [`linkedin::LinkedInConnector`]). Everything the UI shows comes back as the serializable views
 //! in [`views`].
 //!
 //! Nothing here holds or exposes credentials; views never include credential references.
@@ -17,6 +18,7 @@ mod error;
 mod events;
 pub mod instagram;
 mod library;
+pub mod linkedin;
 mod matching;
 pub mod media;
 mod monitor;
