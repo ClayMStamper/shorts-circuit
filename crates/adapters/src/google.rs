@@ -323,11 +323,26 @@ impl Loopback {
         })
     }
 
+    /// Listens on a fixed port, for providers that only accept a pre-registered redirect
+    /// address (`http://127.0.0.1:<port><path>`). Requests are matched by `state`, not path.
+    pub async fn bind_port(port: u16, path: &str) -> std::io::Result<Self> {
+        let listener = TcpListener::bind(("127.0.0.1", port)).await?;
+        let path = if path.starts_with('/') {
+            path.to_owned()
+        } else {
+            format!("/{path}")
+        };
+        Ok(Self {
+            listener,
+            redirect_uri: format!("http://127.0.0.1:{port}{path}"),
+        })
+    }
+
     pub fn redirect_uri(&self) -> &str {
         &self.redirect_uri
     }
 
-    /// Waits for Google to redirect the browser back with an authorization code for
+    /// Waits for the provider to redirect the browser back with an authorization code for
     /// `expected_state`. Requests with another state (or none) are answered and ignored, so a
     /// stray page can't end or hijack the sign-in. The caller bounds the wait.
     pub async fn wait_for_code(&self, expected_state: &str) -> Result<String, OAuthError> {
