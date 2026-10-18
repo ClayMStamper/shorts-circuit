@@ -19,6 +19,7 @@ all = { level = "warn", priority = -1 }
 
 [workspace.dependencies]
 aes = "0.8"
+aes-gcm = "0.10"
 async-trait = "0.1"
 base64 = "0.22"
 cbc = { version = "0.1", features = ["alloc"] }
@@ -43,9 +44,11 @@ uuid = { version = "1", features = ["serde", "v4", "v7"] }
 wiremock = "0.6"
 
 shorts-adapters = { path = "crates/adapters" }
+shorts-cloud = { path = "crates/cloud" }
 shorts-desktop = { path = "crates/desktop" }
 shorts-domain = { path = "crates/domain" }
 shorts-media = { path = "crates/media" }
 shorts-publish = { path = "crates/publish" }
+shorts-runner = { path = "crates/runner" }
 shorts-scheduler = { path = "crates/scheduler" }
 shorts-store = { path = "crates/store" }
