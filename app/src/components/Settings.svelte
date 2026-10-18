@@ -18,6 +18,7 @@
   import TikTokSettings from "./TikTokSettings.svelte";
   import InstagramSettings from "./InstagramSettings.svelte";
   import LinkedInSettings from "./LinkedInSettings.svelte";
+  import SnapchatSettings from "./SnapchatSettings.svelte";
   import CloudSettings from "./CloudSettings.svelte";
   import YouTubeSettings from "./YouTubeSettings.svelte";
 
@@ -211,6 +212,8 @@
 
     <LinkedInSettings {revision} onChanged={async () => (accounts = await api.listAccounts())} />
 
+    <SnapchatSettings {revision} onChanged={async () => (accounts = await api.listAccounts())} />
+
     <TikTokSettings {revision} />
 
     <CloudSettings {revision} />
@@ -239,7 +242,7 @@
         <button type="submit">Add account</button>
       </form>
       <p class="muted">
-        Connect YouTube channels, Instagram accounts and LinkedIn pages above to publish automatically. Other accounts publish through export packages: a folder
+        Connect YouTube channels, Instagram accounts, LinkedIn pages and Snapchat profiles above to publish automatically. Other accounts publish through export packages: a folder
         with the rendered video, caption and step-by-step posting instructions.
       </p>
     </fieldset>

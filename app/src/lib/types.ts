@@ -432,6 +432,7 @@ export type AppEvent =
   | { type: "youTubeChanged" }
   | { type: "instagramChanged" }
   | { type: "linkedInChanged" }
+  | { type: "snapchatChanged" }
   | { type: "cloudChanged" }
   | { type: "watchFolderChecked" }
   | { type: "matchSuggested"; assetId: string | null };
@@ -592,6 +593,38 @@ export interface LinkedInOrganization {
 }
 
 export type YouTubeConnectProgress =
+  | { kind: "idle" }
+  | { kind: "pending" }
+  | { kind: "connected"; account: AccountView }
+  | { kind: "failed"; message: string };
+
+/** How a Snapchat sign-in comes back: the app's loopback port, or text the owner pastes. */
+export type ReturnMode = "loopback" | "paste";
+
+export interface SnapProfileView {
+  accountId: string;
+  displayName: string;
+  connected: boolean;
+  needsReconnect: boolean;
+  lastError: string | null;
+  notes: string[];
+  connectedAt: string | null;
+}
+
+export interface SnapStatus {
+  clientConfigured: boolean;
+  /** The redirect address saved with the Snap OAuth app (not secret), or the suggested default. */
+  redirectUri: string;
+  returnMode: ReturnMode;
+  nextStep: string | null;
+  /** A loopback sign-in is waiting for the browser. */
+  connecting: boolean;
+  /** A sign-in is waiting for the owner to paste the redirect page's text. */
+  awaitingCode: boolean;
+  profiles: SnapProfileView[];
+}
+
+export type SnapConnectProgress =
   | { kind: "idle" }
   | { kind: "pending" }
   | { kind: "connected"; account: AccountView }

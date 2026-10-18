@@ -7,6 +7,7 @@ use serde::Serialize;
 use shorts_adapters::linkedin::Organization;
 use shorts_desktop::instagram::InstagramStatus;
 use shorts_desktop::linkedin::LinkedInStatus;
+use shorts_desktop::snapchat::{SnapConnectProgress, SnapStatus};
 use shorts_desktop::tiktok::{CheckReport, ConnectProgress, TikTokStatus};
 use shorts_desktop::views::{
     AccountView, AssetDetail, AssetSummary, CollectionView, MatchSuggestion, MonitorView,
@@ -545,6 +546,87 @@ pub async fn linkedin_disconnect(
     account_id: AccountId,
 ) -> Result<LinkedInStatus> {
     shell.linkedin.disconnect(account_id).await
+}
+
+#[tauri::command]
+pub async fn snapchat_status(shell: State<'_, Shell>) -> Result<SnapStatus> {
+    shell.snapchat.status().await
+}
+
+/// Saves the owner's Snap OAuth app (client id, secret and its registered redirect address) in
+/// the OS credential store. The secret is never sent back to the webview.
+#[tauri::command]
+pub async fn snapchat_set_client(
+    shell: State<'_, Shell>,
+    client_id: String,
+    client_secret: String,
+    redirect_uri: String,
+) -> Result<SnapStatus> {
+    shell
+        .snapchat
+        .set_client(&client_id, &client_secret, &redirect_uri)
+        .await
+}
+
+#[tauri::command]
+pub async fn snapchat_clear_client(shell: State<'_, Shell>) -> Result<SnapStatus> {
+    shell.snapchat.clear_client().await
+}
+
+/// Opens Snap's consent page in the default browser. With a loopback redirect the UI then
+/// calls `snapchat_connect_progress` until it stops reporting `pending`; otherwise the owner
+/// pastes the redirect page's text into `snapchat_finish_with_code`.
+#[tauri::command]
+pub async fn snapchat_connect(
+    shell: State<'_, Shell>,
+    account_id: Option<AccountId>,
+) -> Result<()> {
+    let url = shell.snapchat.begin_connect(account_id).await?;
+    if url.scheme() != "https" {
+        shell.snapchat.cancel_connect();
+        return Err(AppError::Invalid(
+            "the Snap sign-in page must be https".into(),
+        ));
+    }
+    open_external(url.as_str())?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn snapchat_connect_progress(shell: State<'_, Shell>) -> SnapConnectProgress {
+    shell.snapchat.connect_progress()
+}
+
+#[tauri::command]
+pub fn snapchat_cancel_connect(shell: State<'_, Shell>) {
+    shell.snapchat.cancel_connect();
+}
+
+/// Finishes a paste-mode sign-in with the text Snap's redirect page showed. The code is
+/// exchanged here; no token comes back to the webview.
+#[tauri::command]
+pub async fn snapchat_finish_with_code(
+    shell: State<'_, Shell>,
+    pasted: String,
+) -> Result<SnapStatus> {
+    shell.snapchat.finish_with_code(&pasted).await?;
+    shell.snapchat.status().await
+}
+
+#[tauri::command]
+pub async fn snapchat_check_connection(
+    shell: State<'_, Shell>,
+    account_id: AccountId,
+) -> Result<SnapStatus> {
+    shell.snapchat.check_connection(account_id).await
+}
+
+#[tauri::command]
+pub async fn snapchat_disconnect(
+    shell: State<'_, Shell>,
+    account_id: AccountId,
+) -> Result<SnapStatus> {
+    shell.snapchat.disconnect(account_id).await
 }
 
 /// Opens a published post (an https link the app recorded) in the default browser.
