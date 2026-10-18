@@ -53,6 +53,17 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p shorts-runner -p shorts-cloud
+      - run: cargo test -p shorts-desktop --test cloud
+      - name: Build the runner image
+        run: docker build -f crates/runner/Dockerfile -t shorts-runner:ci .
+      - name: Check the deploy examples
+        working-directory: crates/runner/deploy
+        run: |
+          RUNNER_DOMAIN=runner.example.com POSTGRES_PASSWORD=x SHORTS_RUNNER_MASTER_KEY=x \
+            docker compose -f compose.yaml config --quiet
+          docker run --rm -e RUNNER_DOMAIN=runner.example.com -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker run --rm shorts-runner:ci generate-key
 
   frontend:
     runs-on: ubuntu-latest

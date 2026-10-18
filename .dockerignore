@@ -1,0 +1,10 @@
+# Keep the cloud runner's build context small; it only needs the Rust workspace.
+.git
+target
+app
+site
+docs
+**/node_modules
+*.db
+.env
+.env.*

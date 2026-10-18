@@ -326,7 +326,8 @@ publish are separate operations so interrupted work resumes at the correct step.
 ### Cloud runner (Increment 4, first slice)
 
 Optional. With no runner configured (the default) the desktop behaves exactly as before: every
-publication is desktop-owned and nothing talks to a server.
+publication is desktop-owned and nothing talks to a server. Hosting and operations:
+`docs/cloud-runner.md`.
 
 - **Crates.** `shorts-runner` is a new crate (library plus the `shorts-runner` binary) rather
   than a mode of `shorts-backend`: the broker is public-facing, stateless and holds only OAuth

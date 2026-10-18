@@ -16,10 +16,13 @@ crates/
   domain/      entities, publication state machine, revisions and approvals
   store/       SQLite persistence (SQLx, migrations, WAL)
   media/       FFprobe inspection, render recipes, FFmpeg rendering and cache
-  scheduler/   durable jobs: leases, heartbeats, retries, checkpoints, recovery
+  scheduler/   durable jobs: leases, heartbeats, retries, checkpoints, recovery (over a JobQueue trait)
   adapters/    platform adapter contract, manual-handoff exporter, TikTok Display API and broker clients
+  publish/     the publish pipeline over the adapter contract, shared by the desktop and the runner
   desktop/     application services behind the UI: import, library, review, scheduling, job handlers
-  backend/     Axum OAuth broker (TikTok code exchange and refresh) and (later) cloud runner
+  cloud/       desktop ↔ cloud runner sync protocol and HTTPS client
+  runner/      optional cloud runner: PostgreSQL, encrypted credentials, sync API (docs/cloud-runner.md)
+  backend/     Axum OAuth broker (TikTok code exchange and refresh)
 app/           Svelte + TypeScript frontend (pnpm)
 app/src-tauri/ Tauri 2 shell (separate Cargo workspace; needs the platform WebView)
 ```
@@ -51,6 +54,11 @@ Optional TikTok new-post detection needs the OAuth broker (`cargo run -p shorts-
 with `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET` and `TIKTOK_REDIRECT_URI`) and the desktop app
 started with `SHORTS_BROKER_URL` pointing at it. Without them the feature shows as unavailable;
 see [docs/human-scope.md](docs/human-scope.md) for registering the TikTok developer app.
+
+The optional cloud runner (`crates/runner`, posting while the PC is off) needs PostgreSQL; its
+tests run when `DATABASE_URL` points at one (e.g.
+`postgres://postgres:postgres@localhost/shorts_runner_test`) and skip otherwise. Hosting it is
+described in [docs/cloud-runner.md](docs/cloud-runner.md).
 
 ### Building the Windows installer
 

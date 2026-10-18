@@ -205,6 +205,35 @@ afterwards on LinkedIn).
    link to the post. Check the caption, hashtags and video title on LinkedIn.
 5. Record the video URN, post URN and anything surprising in the PR or an issue.
 
+## Cloud runner (optional: posting while your PC is off)
+
+Nothing here is needed for the desktop app; without a runner everything posts from your PC
+while the app runs. The full walkthrough is `docs/cloud-runner.md`. What only you can do:
+
+1. **Rent a server.** A small Linux VPS, e.g. a DigitalOcean droplet (Ubuntu 24.04, Basic,
+   1 vCPU / 1–2 GB, about $6–12 a month), with your SSH key. Turn on its backups if you want
+   a second copy.
+2. **Pick a domain.** Add an `A` record such as `runner.<your domain>` pointing at the server.
+   The HTTPS certificate is issued for it automatically (Caddy, Let's Encrypt).
+3. **Install and start it** on the server (Docker, the image, `compose.yaml`, `.env`), as in
+   `docs/cloud-runner.md`. You generate the database password and the master encryption key
+   there; they live only in the server's `.env`, never in this repo.
+4. **Keep the master key safe.** Store `SHORTS_RUNNER_MASTER_KEY` in your password manager.
+   Without it the runner's stored credentials can't be decrypted (you would reconnect every
+   account); with it, anyone holding a database backup could read them.
+5. **Create a token for each PC** with `shorts-runner token create "<name>"` and paste it, with
+   the runner's `https://` address, into Settings → Cloud runner → Connect.
+6. **Backups.** Set up the nightly database dump and copy it off the server (the cron line in
+   `docs/cloud-runner.md`). Media needs no backup.
+7. **First test.** Approve a post for a test account a few minutes ahead, choose **Post from
+   the cloud**, quit the app and check it goes out. Record anything surprising in the PR or
+   an issue.
+
+Ongoing: upgrade the image now and then (`git pull`, rebuild, `docker compose up -d`), rotate
+the master key if you suspect it leaked (`docs/cloud-runner.md` → Rotating the encryption
+key), revoke a token when a PC is lost (`shorts-runner token revoke`), and take publications
+back to the PC to resolve anything the runner reports as needing you.
+
 ## Watch folder
 
 Pick a folder your phone or editor syncs finished videos into (e.g. a OneDrive, Google Drive,
@@ -224,10 +253,12 @@ Prefer the original export over a video saved back from TikTok, which carries a 
 ## Paid infrastructure
 
 - Domain: OAuth redirects, Google domain verification, privacy-policy hosting.
-- OAuth backend hosting (Axum + Postgres): **not needed for publishing to YouTube, Instagram or
+- OAuth backend hosting (Axum): **not needed for publishing to YouTube, Instagram or
   LinkedIn** (YouTube uses a desktop OAuth client; Instagram and LinkedIn are connected with
-  pasted tokens). Needed for TikTok new-post detection, for a browser sign-in flow if the app is
-  shared with other people, and for cloud mode (posting while the PC is off).
+  pasted tokens). Needed for TikTok new-post detection and for a browser sign-in flow if the
+  app is shared with other people.
+- Cloud runner hosting (a small VPS with PostgreSQL and a domain): only for cloud mode, i.e.
+  posting while the PC is off. See "Cloud runner" above.
 - Object storage for media staging: not needed for Instagram (the app uploads the file to the
   container directly); possibly for other providers that only fetch a public URL.
 - Code signing: Windows (Azure Trusted Signing or OV cert); Apple Developer Program for macOS.
@@ -283,7 +314,8 @@ you can do:
 
 ## Ongoing duties
 
-- Approving publications; resolving `OutcomeUnknown` publishes.
+- Approving publications; resolving `OutcomeUnknown` publishes (for one the cloud runner
+  reports, take it back to the PC first).
 - Keeping the app running at least every few weeks so Instagram tokens get renewed, or pasting
   a new token when an account says *needs reconnecting*.
 - Switching a YouTube channel to public uploads once the Google Cloud project passes the API
