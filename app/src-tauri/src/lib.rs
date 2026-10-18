@@ -3,6 +3,7 @@
 //! `shorts-desktop`; commands here only translate arguments and results. No credentials or
 //! tokens ever cross into the webview.
 
+mod cloud;
 mod commands;
 mod keyring_store;
 
@@ -10,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use shorts_adapters::AdapterRegistry;
+use shorts_desktop::cloud::CloudSync;
 use shorts_desktop::instagram::{InstagramConnector, InstagramSetup};
 use shorts_desktop::linkedin::{LinkedInConnector, LinkedInSetup};
 use shorts_desktop::tiktok::{TikTokIntake, TikTokSetup};
@@ -43,6 +45,8 @@ pub struct Shell {
     pub instagram: Arc<InstagramConnector>,
     /// LinkedIn Company Page posts; pages are connected in Settings with a pasted token.
     pub linkedin: Arc<LinkedInConnector>,
+    /// Optional cloud runner; off until its address and token are saved in Settings.
+    pub cloud: Arc<CloudSync>,
     pub(crate) watch: Mutex<Option<WatchFolder>>,
     shutdown: CancellationToken,
 }
@@ -144,6 +148,8 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
     );
     tauri::async_runtime::spawn(tiktok.clone().run(shutdown.clone()));
     tauri::async_runtime::spawn(instagram.clone().run(shutdown.clone()));
+    let cloud = CloudSync::new(app.clone(), Arc::new(keyring_store::KeyringCredentials));
+    tauri::async_runtime::spawn(cloud.clone().run(shutdown.clone()));
     Ok(Shell {
         app,
         media,
@@ -151,6 +157,7 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
         youtube,
         instagram,
         linkedin,
+        cloud,
         watch: Mutex::new(None),
         shutdown,
     })
@@ -269,6 +276,13 @@ pub fn run() {
             commands::update_preferences,
             commands::media_status,
             commands::open_folder,
+            cloud::cloud_status,
+            cloud::cloud_configure,
+            cloud::cloud_set_enabled,
+            cloud::cloud_forget,
+            cloud::cloud_sync_now,
+            cloud::send_to_cloud,
+            cloud::take_back_from_cloud,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Tauri application");

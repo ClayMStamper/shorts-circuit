@@ -69,6 +69,14 @@ pub enum CloudCredential {
 }
 
 impl CloudCredential {
+    /// A SHA-256 over the whole credential, so the desktop can tell whether it changed since
+    /// it last sent it without keeping a copy.
+    pub fn digest(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let bytes = serde_json::to_vec(self).expect("credentials serialize");
+        hex::encode(Sha256::digest(bytes))
+    }
+
     pub fn platform(&self) -> Platform {
         match self {
             Self::YoutubeShorts { .. } => Platform::YoutubeShorts,

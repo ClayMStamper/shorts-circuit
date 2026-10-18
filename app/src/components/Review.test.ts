@@ -48,6 +48,8 @@ function review(overrides: Partial<ReviewView> = {}): ReviewView {
       progressText: null,
       statusText: "Waiting for your approval.",
       actions: ["review", "approve", "edit", "reschedule", "exportPackage", "cancel"],
+      owner: "desktop",
+      cloudNote: null,
       updatedAt: "2026-10-30T12:00:00Z",
     },
     account: {

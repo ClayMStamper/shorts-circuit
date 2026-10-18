@@ -35,6 +35,7 @@ use crate::credentials::CredentialStore;
 use crate::error::{AppError, AppResult};
 use crate::events::AppEvent;
 use crate::views::AccountView;
+use shorts_cloud::{CloudCredential, Secret};
 
 const ACCOUNTS_KEY: &str = "instagram_accounts";
 /// Renew a token when it has less than this left (and is old enough to be renewed).
@@ -605,4 +606,59 @@ impl InstagramConnector {
             }
         }
     }
+}
+
+// --- cloud runner ----------------------------------------------------------------------------
+
+/// The account's long-lived token for the cloud runner.
+pub(crate) fn cloud_credential(
+    credentials: &dyn CredentialStore,
+    account: AccountId,
+) -> Result<Option<CloudCredential>, String> {
+    let grant: Option<Grant> = credentials
+        .get(&grant_key(account))
+        .map_err(|e| e.to_string())?
+        .and_then(|r| serde_json::from_str(&r).ok());
+    Ok(grant.map(|g| CloudCredential::InstagramReels {
+        access_token: Secret::new(g.access_token),
+        user_id: g.user_id,
+        issued_at: g.issued_at,
+        expires_at: g.expires_at,
+    }))
+}
+
+/// Keeps a token the cloud runner renewed.
+pub(crate) fn import_cloud_credential(
+    credentials: &dyn CredentialStore,
+    account: AccountId,
+    credential: &CloudCredential,
+) -> Result<(), String> {
+    let CloudCredential::InstagramReels {
+        access_token,
+        user_id,
+        issued_at,
+        expires_at,
+    } = credential
+    else {
+        return Err("not an Instagram credential".into());
+    };
+    let key = grant_key(account);
+    let Some(mut grant) = credentials
+        .get(&key)
+        .map_err(|e| e.to_string())?
+        .and_then(|r| serde_json::from_str::<Grant>(&r).ok())
+    else {
+        return Ok(());
+    };
+    if &grant.user_id != user_id {
+        return Err("the cloud runner's credential is for another account".into());
+    }
+    if *expires_at <= grant.expires_at {
+        return Ok(());
+    }
+    grant.access_token = access_token.expose().to_owned();
+    grant.issued_at = *issued_at;
+    grant.expires_at = *expires_at;
+    let raw = serde_json::to_string(&grant).expect("grant serializes");
+    credentials.set(&key, &raw).map_err(|e| e.to_string())
 }

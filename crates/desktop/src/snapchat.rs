@@ -42,6 +42,7 @@ use crate::credentials::CredentialStore;
 use crate::error::{AppError, AppResult};
 use crate::events::AppEvent;
 use crate::views::AccountView;
+use shorts_cloud::{CloudCredential, Secret};
 
 const CLIENT_KEY: &str = "snap_oauth_client";
 const PROFILES_KEY: &str = "snapchat_profiles";
@@ -861,4 +862,57 @@ impl SnapchatConnector {
         self.app.emit(AppEvent::SnapchatChanged);
         self.status().await
     }
+}
+
+// --- cloud runner ----------------------------------------------------------------------------
+
+/// The profile's credential for the cloud runner: the Snap OAuth app and the refresh token.
+pub(crate) fn cloud_credential(
+    credentials: &dyn CredentialStore,
+    account: AccountId,
+) -> Result<Option<CloudCredential>, String> {
+    let read = |key: &str| credentials.get(key).map_err(|e| e.to_string());
+    let config: Option<AppConfig> = read(CLIENT_KEY)?.and_then(|r| serde_json::from_str(&r).ok());
+    let grant: Option<Grant> =
+        read(&grant_key(account))?.and_then(|r| serde_json::from_str(&r).ok());
+    Ok(match (config, grant) {
+        (Some(config), Some(grant)) => Some(CloudCredential::SnapchatSpotlight {
+            client_id: config.client.client_id,
+            client_secret: Secret::new(config.client.client_secret),
+            refresh_token: Secret::new(grant.refresh_token),
+            profile_id: grant.profile_id,
+        }),
+        _ => None,
+    })
+}
+
+/// Keeps a refresh token Snap rotated while the cloud runner used it; the old one no longer
+/// works.
+pub(crate) fn import_cloud_credential(
+    credentials: &dyn CredentialStore,
+    account: AccountId,
+    credential: &CloudCredential,
+) -> Result<(), String> {
+    let CloudCredential::SnapchatSpotlight {
+        refresh_token,
+        profile_id,
+        ..
+    } = credential
+    else {
+        return Err("not a Snapchat credential".into());
+    };
+    let key = grant_key(account);
+    let Some(mut grant) = credentials
+        .get(&key)
+        .map_err(|e| e.to_string())?
+        .and_then(|r| serde_json::from_str::<Grant>(&r).ok())
+    else {
+        return Ok(());
+    };
+    if &grant.profile_id != profile_id {
+        return Err("the cloud runner's credential is for another profile".into());
+    }
+    grant.refresh_token = refresh_token.expose().to_owned();
+    let raw = serde_json::to_string(&grant).expect("grant serializes");
+    credentials.set(&key, &raw).map_err(|e| e.to_string())
 }

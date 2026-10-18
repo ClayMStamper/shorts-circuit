@@ -1,8 +1,9 @@
-use std::sync::{Arc, OnceLock, RwLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use chrono::{DateTime, Utc};
 use shorts_adapters::{AdapterRegistry, ErasedAdapter, ManualHandoff};
-use shorts_domain::{JobKind, Platform};
+use shorts_domain::{JobKind, Platform, PublicationId};
 use shorts_scheduler::{Clock, Worker, WorkerConfig};
 use shorts_store::Store;
 use tokio::sync::broadcast;
@@ -23,6 +24,8 @@ pub struct App {
     pub(crate) clock: Arc<dyn Clock>,
     events: broadcast::Sender<AppEvent>,
     worker: OnceLock<Arc<Worker>>,
+    /// Problems reaching the cloud runner, per cloud-owned publication (set by the sync).
+    cloud_notes: Mutex<HashMap<PublicationId, String>>,
 }
 
 impl App {
@@ -44,6 +47,7 @@ impl App {
             clock,
             events,
             worker: OnceLock::new(),
+            cloud_notes: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -137,5 +141,25 @@ impl App {
 
     pub(crate) fn running_worker(&self) -> Option<&Arc<Worker>> {
         self.worker.get()
+    }
+
+    pub(crate) fn cloud_note(&self, id: PublicationId) -> Option<String> {
+        self.cloud_notes
+            .lock()
+            .expect("cloud notes")
+            .get(&id)
+            .cloned()
+    }
+
+    pub(crate) fn set_cloud_note(&self, id: PublicationId, note: Option<String>) {
+        let mut notes = self.cloud_notes.lock().expect("cloud notes");
+        let changed = match note {
+            Some(n) => notes.insert(id, n.clone()).as_ref() != Some(&n),
+            None => notes.remove(&id).is_some(),
+        };
+        drop(notes);
+        if changed {
+            self.emit(AppEvent::PublicationChanged { id: id.to_string() });
+        }
     }
 }

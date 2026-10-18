@@ -35,6 +35,7 @@ use crate::credentials::CredentialStore;
 use crate::error::{AppError, AppResult};
 use crate::events::AppEvent;
 use crate::views::AccountView;
+use shorts_cloud::{CloudCredential, Secret};
 
 const PAGES_KEY: &str = "linkedin_pages";
 /// Show a warning when a token has less than this left.
@@ -492,5 +493,35 @@ impl LinkedInConnector {
         self.save_states(&states).await?;
         self.app.emit(AppEvent::LinkedInChanged);
         self.status().await
+    }
+}
+
+// --- cloud runner ----------------------------------------------------------------------------
+
+/// The page's token for the cloud runner.
+pub(crate) fn cloud_credential(
+    credentials: &dyn CredentialStore,
+    account: AccountId,
+) -> Result<Option<CloudCredential>, String> {
+    let grant: Option<Grant> = credentials
+        .get(&grant_key(account))
+        .map_err(|e| e.to_string())?
+        .and_then(|r| serde_json::from_str(&r).ok());
+    Ok(grant.map(|g| CloudCredential::Linkedin {
+        access_token: Secret::new(g.access_token),
+        organization: g.organization,
+        expires_at: g.expires_at,
+    }))
+}
+
+/// LinkedIn tokens can't be refreshed, so the runner never changes one; nothing to keep.
+pub(crate) fn import_cloud_credential(
+    _credentials: &dyn CredentialStore,
+    _account: AccountId,
+    credential: &CloudCredential,
+) -> Result<(), String> {
+    match credential {
+        CloudCredential::Linkedin { .. } => Ok(()),
+        _ => Err("not a LinkedIn credential".into()),
     }
 }

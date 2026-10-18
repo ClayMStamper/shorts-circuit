@@ -40,7 +40,12 @@ export type Action =
   | "confirmPosted"
   | "resolveOutcome"
   | "exportPackage"
-  | "reconnect";
+  | "reconnect"
+  | "sendToCloud"
+  | "takeBack";
+
+/** Who runs a publication: this computer, or the optional cloud runner. */
+export type ExecutionOwner = "desktop" | "cloud";
 
 export type PermissionStatus = "unknown" | "granted" | "denied";
 
@@ -256,7 +261,22 @@ export interface PublicationView {
   progressText: string | null;
   statusText: string;
   actions: Action[];
+  owner: ExecutionOwner;
+  /** While the cloud runner owns it: a problem reaching the runner, if any. */
+  cloudNote: string | null;
   updatedAt: string;
+}
+
+/** Cloud mode (Settings → Cloud runner). Off until an address and token are saved. */
+export interface CloudStatus {
+  enabled: boolean;
+  url: string | null;
+  tokenSaved: boolean;
+  /** Publications the cloud runner owns right now. */
+  held: number;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  nextStep: string | null;
 }
 
 export interface AssetDetail {

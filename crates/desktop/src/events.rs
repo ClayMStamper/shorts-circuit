@@ -41,6 +41,8 @@ pub enum AppEvent {
     LinkedInChanged,
     /// A Snapchat profile was connected or disconnected, or a sign-in progressed.
     SnapchatChanged,
+    /// Cloud mode was configured, or a sync with the cloud runner finished.
+    CloudChanged,
     /// The watch folder was listed (on start, on its timer, or "Check now").
     WatchFolderChecked,
     /// A file might be the original of a pending TikTok post (`asset_id` is the file's asset

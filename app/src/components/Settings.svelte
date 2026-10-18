@@ -18,6 +18,7 @@
   import TikTokSettings from "./TikTokSettings.svelte";
   import InstagramSettings from "./InstagramSettings.svelte";
   import LinkedInSettings from "./LinkedInSettings.svelte";
+  import CloudSettings from "./CloudSettings.svelte";
   import YouTubeSettings from "./YouTubeSettings.svelte";
 
   let { revision = 0 }: { revision?: number } = $props();
@@ -211,6 +212,8 @@
     <LinkedInSettings {revision} onChanged={async () => (accounts = await api.listAccounts())} />
 
     <TikTokSettings {revision} />
+
+    <CloudSettings {revision} />
 
     <fieldset>
       <legend>Destination accounts</legend>

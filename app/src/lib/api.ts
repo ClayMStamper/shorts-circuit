@@ -8,6 +8,7 @@ import type {
   AssetSummary,
   AssetUpdate,
   CheckReport,
+  CloudStatus,
   CollectionView,
   ConnectProgress,
   EditPublication,
@@ -159,6 +160,15 @@ export const api = {
     call<LinkedInStatus>("linkedin_connect", { accessToken, page, accountId }),
   linkedinDisconnect: (accountId: string) => call<LinkedInStatus>("linkedin_disconnect", { accountId }),
   openLink: (url: string) => call<void>("open_link", { url }),
+
+  // Cloud runner (optional)
+  cloudStatus: () => call<CloudStatus>("cloud_status"),
+  cloudConfigure: (url: string, token: string) => call<CloudStatus>("cloud_configure", { url, token }),
+  cloudSetEnabled: (enabled: boolean) => call<CloudStatus>("cloud_set_enabled", { enabled }),
+  cloudForget: () => call<CloudStatus>("cloud_forget"),
+  cloudSyncNow: () => call<CloudStatus>("cloud_sync_now"),
+  sendToCloud: (id: string) => call<PublicationView>("send_to_cloud", { id }),
+  takeBackFromCloud: (id: string) => call<PublicationView>("take_back_from_cloud", { id }),
 
   // Monitor
   monitor: () => call<MonitorView>("monitor"),

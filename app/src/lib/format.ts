@@ -92,6 +92,8 @@ const ACTION_LABELS: Record<Action, string> = {
   resolveOutcome: "Record outcome",
   exportPackage: "Export package",
   reconnect: "Reconnect…",
+  sendToCloud: "Post from the cloud",
+  takeBack: "Take back",
 };
 
 export function actionLabel(action: Action): string {

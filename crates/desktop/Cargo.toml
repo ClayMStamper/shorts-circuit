@@ -21,6 +21,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 shorts-adapters.workspace = true
+shorts-cloud.workspace = true
 shorts-domain.workspace = true
 shorts-media.workspace = true
 shorts-publish.workspace = true
@@ -32,5 +33,9 @@ tokio-util.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+axum.workspace = true
+shorts-runner.workspace = true
+sqlx = { workspace = true, features = ["postgres"] }
 tempfile.workspace = true
+uuid.workspace = true
 wiremock.workspace = true

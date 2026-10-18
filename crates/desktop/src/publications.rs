@@ -615,7 +615,9 @@ impl App {
             progress_fraction: progress.as_ref().and_then(|g| g.fraction),
             progress_text: progress.and_then(|g| g.detail),
             status_text: status_text(p, &account_name),
-            actions: actions(p),
+            actions: actions(p, crate::cloud::settings(self).await?.enabled),
+            owner: p.owner(),
+            cloud_note: self.cloud_note(p.id()),
             updated_at: p.record().updated_at,
         })
     }
@@ -637,6 +639,9 @@ fn format_local(s: &Schedule) -> String {
 
 fn status_text(p: &Publication, account: &str) -> String {
     use PublicationState as S;
+    if p.owner() == ExecutionOwner::Cloud {
+        return cloud_status_text(p, account);
+    }
     let err = p.last_error().unwrap_or("unknown error");
     match p.state() {
         S::Draft => "Draft: submit it for review when the video and copy are ready.".into(),
@@ -680,10 +685,63 @@ fn status_text(p: &Publication, account: &str) -> String {
     }
 }
 
-fn actions(p: &Publication) -> Vec<Action> {
+/// While the cloud runner owns it, the text says so, and anything the user must decide is
+/// done after taking it back.
+fn cloud_status_text(p: &Publication, account: &str) -> String {
+    use PublicationState as S;
+    let err = p.last_error().unwrap_or("unknown error");
+    match p.state() {
+        S::Scheduled => match p.schedule() {
+            Some(s) => format!(
+                "The cloud runner posts it {}, even if this computer is off.",
+                format_local(s)
+            ),
+            None => "The cloud runner has it.".into(),
+        },
+        S::Preparing | S::Uploading | S::Processing | S::Publishing => {
+            "The cloud runner is publishing it…".into()
+        }
+        S::Published => match p.published().and_then(|r| r.url.clone()) {
+            Some(url) => format!("Published by the cloud runner: {url}"),
+            None => "Published by the cloud runner.".into(),
+        },
+        S::RetryScheduled => match p.retry_at() {
+            Some(at) => format!(
+                "The cloud runner retries at {} UTC after: {err}",
+                at.format("%Y-%m-%d %H:%M")
+            ),
+            None => format!("The cloud runner will retry after: {err}"),
+        },
+        S::NeedsAuthentication => format!(
+            "Reconnect {account} on this computer; the cloud runner gets the new sign-in and              continues: {err}"
+        ),
+        S::NeedsUserAction => format!(
+            "The cloud runner needs you: {}. Take it back to deal with it here.",
+            p.user_action()
+                .map(shorts_domain::UserAction::describe)
+                .unwrap_or_else(|| err.to_owned())
+        ),
+        S::OutcomeUnknown => format!(
+            "The platform may or may not have published this ({err}). Check {}, then take it              back and record what happened; it will not be retried automatically.",
+            p.platform()
+        ),
+        S::Failed => format!("The cloud runner gave up: {err}. Take it back to retry or edit it."),
+        S::Draft | S::AwaitingApproval | S::Cancelled => "The cloud runner has it.".into(),
+    }
+}
+
+fn actions(p: &Publication, cloud_enabled: bool) -> Vec<Action> {
     use Action as A;
     use PublicationState as S;
-    match p.state() {
+    if p.owner() == ExecutionOwner::Cloud {
+        // Everything else waits until it is back on this computer.
+        return match p.state() {
+            S::Published => vec![],
+            S::NeedsAuthentication => vec![A::Reconnect, A::TakeBack],
+            _ => vec![A::TakeBack],
+        };
+    }
+    let mut actions = match p.state() {
         S::Draft => vec![
             A::Edit,
             A::SubmitForReview,
@@ -724,7 +782,11 @@ fn actions(p: &Publication) -> Vec<Action> {
         },
         S::OutcomeUnknown => vec![A::ResolveOutcome],
         S::Failed => vec![A::Retry, A::Edit, A::RevokeApproval, A::Cancel],
+    };
+    if cloud_enabled && p.state() == S::Scheduled {
+        actions.insert(1, A::SendToCloud);
     }
+    actions
 }
 
 #[cfg(test)]

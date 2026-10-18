@@ -2221,6 +2221,7 @@ name = "shorts-desktop"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "chrono",
  "chrono-tz",
  "notify",
@@ -2229,16 +2230,20 @@ dependencies = [
  "serde",
  "serde_json",
  "shorts-adapters",
+ "shorts-cloud",
  "shorts-domain",
  "shorts-media",
  "shorts-publish",
+ "shorts-runner",
  "shorts-scheduler",
  "shorts-store",
+ "sqlx",
  "tempfile",
  "thiserror",
  "tokio",
  "tokio-util",
  "tracing",
+ "uuid",
  "wiremock",
 ]
 

@@ -3,8 +3,8 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use shorts_domain::{
-    ConnectedAccount, MediaProperties, NextAction, Permission, Platform, PublicationState,
-    PublishAccess, RenderRecipe, RuleOutput, ValidationIssue,
+    ConnectedAccount, ExecutionOwner, MediaProperties, NextAction, Permission, Platform,
+    PublicationState, PublishAccess, RenderRecipe, RuleOutput, ValidationIssue,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -172,6 +172,10 @@ pub enum Action {
     ExportPackage,
     /// Sign the destination account in again (Settings).
     Reconnect,
+    /// Hand it to the cloud runner, which posts it while this computer is off.
+    SendToCloud,
+    /// Take it back from the cloud runner to this computer.
+    TakeBack,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -209,6 +213,10 @@ pub struct PublicationView {
     /// What happens next or what the user needs to do, in plain words.
     pub status_text: String,
     pub actions: Vec<Action>,
+    /// Who runs it: this computer, or the cloud runner.
+    pub owner: ExecutionOwner,
+    /// While the cloud runner owns it: a problem reaching the runner, if any.
+    pub cloud_note: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
