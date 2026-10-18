@@ -594,11 +594,12 @@ impl Publication {
         self.record.handover
     }
 
-    /// The cloud runner's status in the form the desktop mirrors.
-    pub fn owner_report(&self, reached_provider: bool) -> Option<OwnerReport> {
-        Some(OwnerReport {
+    /// The cloud runner's status in the form the desktop mirrors, for the hand-over that gave
+    /// it the publication (kept by the runner after it gave the publication back).
+    pub fn owner_report(&self, handover: HandoverId, reached_provider: bool) -> OwnerReport {
+        OwnerReport {
             publication_id: self.record.id,
-            handover: self.record.handover?,
+            handover,
             revision: self.record.revision.number,
             owner: self.record.owner,
             state: self.record.state,
@@ -608,7 +609,7 @@ impl Publication {
             published: self.record.published.clone(),
             reached_provider,
             updated_at: self.record.updated_at,
-        })
+        }
     }
 
     /// The runner's copy of a publication the desktop handed over. Refused unless the record

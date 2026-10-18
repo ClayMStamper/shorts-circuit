@@ -369,7 +369,7 @@ publication is desktop-owned and nothing talks to a server.
     `base_revision` (Snap and sometimes Google rotate refresh tokens) it answers `409` and the
     desktop first pulls `GET /v1/accounts/{id}/credential` into its OS credential store. A new
     credential resumes the runner's `NeedsAuthentication` publications for that account.
-  - `PUT /v1/publications/{id} {handover, publication, media, overdue}`: the approved,
+  - `PUT /v1/publications/{id} {handover, publication, media}`: the approved,
     immutable revision. Same handover → same answer; a different revision under a live
     handover → `409`; a handover the desktop already took back → `410`.
   - `GET /v1/publications` / `GET /v1/publications/{id}`: owner reports (state, revision,

@@ -705,7 +705,7 @@ fn hand_to_cloud(p: &mut Publication, execution: Execution) -> Result<HandoverId
 }
 
 fn report(p: &Publication, state: PublicationState) -> OwnerReport {
-    let mut r = p.owner_report(false).unwrap();
+    let mut r = p.owner_report(p.handover().unwrap(), false);
     r.state = state;
     r
 }
