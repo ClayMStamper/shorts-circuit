@@ -392,12 +392,18 @@ impl CloudSync {
         };
         let _busy = self.busy.lock().await;
         let result = self.sync_with(&client).await;
-        {
+        let changed = {
             let mut state = self.state.lock().expect("cloud state");
+            let error = result.as_ref().err().map(ToString::to_string);
+            let changed = state.last_error != error || state.last_sync_at.is_none();
             state.last_sync_at = Some(self.app.now());
-            state.last_error = result.as_ref().err().map(ToString::to_string);
+            state.last_error = error;
+            changed
+        };
+        // Publication changes have their own events; this one is for the Settings status.
+        if changed {
+            self.app.emit(AppEvent::CloudChanged);
         }
-        self.app.emit(AppEvent::CloudChanged);
         result
     }
 

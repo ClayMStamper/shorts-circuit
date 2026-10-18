@@ -432,6 +432,7 @@ export type AppEvent =
   | { type: "youTubeChanged" }
   | { type: "instagramChanged" }
   | { type: "linkedInChanged" }
+  | { type: "cloudChanged" }
   | { type: "watchFolderChecked" }
   | { type: "matchSuggested"; assetId: string | null };
 
