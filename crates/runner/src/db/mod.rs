@@ -125,6 +125,27 @@ impl PgStore {
     }
 }
 
+/// Ends a transaction: commits on success; on an error rolls back right away. (A dropped
+/// transaction is only rolled back when its connection is next used, so its row locks could
+/// outlive the call and make a claim skip a job it should take.)
+pub(crate) async fn finish<T>(
+    tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    result: DbResult<T>,
+) -> DbResult<T> {
+    match result {
+        Ok(value) => {
+            tx.commit().await?;
+            Ok(value)
+        }
+        Err(e) => {
+            if let Err(rollback) = tx.rollback().await {
+                tracing::warn!(error = %rollback, "rollback failed");
+            }
+            Err(e)
+        }
+    }
+}
+
 pub(crate) fn to_i64(v: u64) -> i64 {
     i64::try_from(v).unwrap_or(i64::MAX)
 }

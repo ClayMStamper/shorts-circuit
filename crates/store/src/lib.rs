@@ -251,37 +251,51 @@ impl Store {
         reached_provider: impl FnOnce(&shorts_domain::Job) -> bool,
     ) -> StoreResult<shorts_domain::Publication> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        let mut publication = publications::get_publication(&mut tx, id)
-            .await?
-            .ok_or_else(|| StoreError::not_found("publication", id))?;
-        let subject = id.to_string();
-        let job = jobs::open_for_tx(
-            &mut tx,
-            shorts_domain::JobKind::PublishPublication,
-            &subject,
-        )
-        .await?;
-        let execution = shorts_domain::Execution {
-            job_running: job
-                .as_ref()
-                .is_some_and(|j| j.state() == shorts_domain::JobState::Running),
-            reached_provider: job.as_ref().is_some_and(reached_provider),
-        };
-        let transition = publication.apply(
-            shorts_domain::PublicationEvent::HandToCloud {
-                handover,
-                execution,
-            },
-            now,
-        )?;
-        if let Some(mut job) = job {
-            let loaded = job.version();
-            job.cancel(now)?;
-            jobs::write_tx(&mut tx, &job, loaded).await?;
+        let result = async {
+            let mut publication = publications::get_publication(&mut tx, id)
+                .await?
+                .ok_or_else(|| StoreError::not_found("publication", id))?;
+            let subject = id.to_string();
+            let job = jobs::open_for_tx(
+                &mut tx,
+                shorts_domain::JobKind::PublishPublication,
+                &subject,
+            )
+            .await?;
+            let execution = shorts_domain::Execution {
+                job_running: job
+                    .as_ref()
+                    .is_some_and(|j| j.state() == shorts_domain::JobState::Running),
+                reached_provider: job.as_ref().is_some_and(reached_provider),
+            };
+            let transition = publication.apply(
+                shorts_domain::PublicationEvent::HandToCloud {
+                    handover,
+                    execution,
+                },
+                now,
+            )?;
+            if let Some(mut job) = job {
+                let loaded = job.version();
+                job.cancel(now)?;
+                jobs::write_tx(&mut tx, &job, loaded).await?;
+            }
+            publications::save_publication(&mut tx, &publication, &transition).await?;
+            Ok(publication)
         }
-        publications::save_publication(&mut tx, &publication, &transition).await?;
-        tx.commit().await?;
-        Ok(publication)
+        .await;
+        // Roll back right away on a refusal, so the write lock isn't held until the
+        // connection's next use.
+        match result {
+            Ok(p) => {
+                tx.commit().await?;
+                Ok(p)
+            }
+            Err(e) => {
+                tx.rollback().await?;
+                Err(e)
+            }
+        }
     }
 
     /// Records that a rule created `publication`, inserting both in one transaction. Returns

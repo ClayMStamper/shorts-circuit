@@ -12,7 +12,7 @@ use sqlx::types::Json;
 use sqlx::{PgConnection, Row};
 use uuid::Uuid;
 
-use super::{DbError, DbResult, PgStore, jobs, to_i64};
+use super::{DbError, DbResult, PgStore, finish, jobs, to_i64};
 
 /// Transient failures a cloud publish job may have before it fails.
 pub const PUBLISH_MAX_FAILURES: u32 = 6;
@@ -182,70 +182,69 @@ impl PgStore {
         let id = publication.id();
         let account = publication.content().destination.account_id;
         let mut tx = self.pool.begin().await?;
-
-        if let Some(existing) = get(&mut tx, id, true).await? {
-            if existing.installation != installation {
-                return Err(DbError::not_found("publication", id));
-            }
-            let held = existing.handover == put.handover;
-            match (held, existing.publication.owner()) {
-                (true, ExecutionOwner::Cloud) => {
-                    tx.rollback().await?;
-                    return Ok(Received::Unchanged(existing));
+        let result = async {
+            if let Some(existing) = get(&mut tx, id, true).await? {
+                if existing.installation != installation {
+                    return Err(DbError::not_found("publication", id));
                 }
-                (true, ExecutionOwner::Desktop) => return Err(DbError::HandoverGone),
-                (false, ExecutionOwner::Cloud) => {
-                    return Err(DbError::Refused(
+                let held = existing.handover == put.handover;
+                match (held, existing.publication.owner()) {
+                    (true, ExecutionOwner::Cloud) => {
+                        return Ok(Received::Unchanged(existing));
+                    }
+                    (true, ExecutionOwner::Desktop) => return Err(DbError::HandoverGone),
+                    (false, ExecutionOwner::Cloud) => {
+                        return Err(DbError::Refused(
                         "the runner is already publishing this under an earlier hand-over; take \
                          that one back first"
                             .into(),
                     ));
+                    }
+                    // Taken back earlier and now handed over again.
+                    (false, ExecutionOwner::Desktop) => {}
                 }
-                // Taken back earlier and now handed over again.
-                (false, ExecutionOwner::Desktop) => {}
             }
-        }
 
-        let account_installation: Option<Uuid> =
-            sqlx::query_scalar("SELECT installation_id FROM accounts WHERE id = $1")
-                .bind(account.as_uuid())
-                .fetch_optional(&mut *tx)
-                .await?;
-        if account_installation != Some(installation) {
-            return Err(DbError::Refused(
-                "send the account and its credential before the publication".into(),
-            ));
-        }
-        let complete: Option<bool> = sqlx::query_scalar(
-            "SELECT complete FROM uploads WHERE installation_id = $1 AND sha256 = $2",
-        )
-        .bind(installation)
-        .bind(&put.media.sha256)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if complete != Some(true) {
-            return Err(DbError::MediaIncomplete);
-        }
+            let account_installation: Option<Uuid> =
+                sqlx::query_scalar("SELECT installation_id FROM accounts WHERE id = $1")
+                    .bind(account.as_uuid())
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            if account_installation != Some(installation) {
+                return Err(DbError::Refused(
+                    "send the account and its credential before the publication".into(),
+                ));
+            }
+            let complete: Option<bool> = sqlx::query_scalar(
+                "SELECT complete FROM uploads WHERE installation_id = $1 AND sha256 = $2",
+            )
+            .bind(installation)
+            .bind(&put.media.sha256)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if complete != Some(true) {
+                return Err(DbError::MediaIncomplete);
+            }
 
-        let revision = publication.revision();
-        let stored: Option<Json<shorts_domain::RevisionContent>> = sqlx::query_scalar(
+            let revision = publication.revision();
+            let stored: Option<Json<shorts_domain::RevisionContent>> = sqlx::query_scalar(
             "SELECT content FROM publication_revisions WHERE publication_id = $1 AND number = $2",
         )
         .bind(id.as_uuid())
         .bind(i32::try_from(revision.number).unwrap_or(i32::MAX))
         .fetch_optional(&mut *tx)
         .await?;
-        if let Some(content) = &stored
-            && content.0 != revision.content
-        {
-            return Err(DbError::Refused(format!(
-                "revision {} was handed over before with different content",
-                revision.number
-            )));
-        }
+            if let Some(content) = &stored
+                && content.0 != revision.content
+            {
+                return Err(DbError::Refused(format!(
+                    "revision {} was handed over before with different content",
+                    revision.number
+                )));
+            }
 
-        let r = publication.record();
-        sqlx::query(
+            let r = publication.record();
+            sqlx::query(
             "INSERT INTO publications (id, installation_id, account_id, handover_id, owner, state, \
              revision, record, media, media_sha256, version, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12) \
@@ -269,9 +268,9 @@ impl PgStore {
         .bind(now)
         .execute(&mut *tx)
         .await?;
-        // Revisions reference the publication row, so they are inserted after it.
-        if stored.is_none() {
-            sqlx::query(
+            // Revisions reference the publication row, so they are inserted after it.
+            if stored.is_none() {
+                sqlx::query(
                 "INSERT INTO publication_revisions (publication_id, number, content, received_at) \
                  VALUES ($1, $2, $3, $4)",
             )
@@ -281,23 +280,25 @@ impl PgStore {
             .bind(now)
             .execute(&mut *tx)
             .await?;
+            }
+            log(&mut tx, id, None, r.state, "received", revision.number, now).await?;
+            let at = publication
+                .due_at()
+                .ok_or_else(|| DbError::Corrupt("a handed-over publication has no time".into()))?;
+            jobs::insert(
+                &mut tx,
+                &publish_job(&publication, at, PUBLISH_MAX_FAILURES, now),
+            )
+            .await?;
+            Ok(Received::New(HeldPublication {
+                installation,
+                handover: put.handover,
+                publication,
+                media: put.media.clone(),
+            }))
         }
-        log(&mut tx, id, None, r.state, "received", revision.number, now).await?;
-        let at = publication
-            .due_at()
-            .ok_or_else(|| DbError::Corrupt("a handed-over publication has no time".into()))?;
-        jobs::insert(
-            &mut tx,
-            &publish_job(&publication, at, PUBLISH_MAX_FAILURES, now),
-        )
-        .await?;
-        tx.commit().await?;
-        Ok(Received::New(HeldPublication {
-            installation,
-            handover: put.handover,
-            publication,
-            media: put.media.clone(),
-        }))
+        .await;
+        finish(tx, result).await
     }
 
     pub async fn publication(&self, id: PublicationId) -> DbResult<Option<HeldPublication>> {
@@ -321,11 +322,9 @@ impl PgStore {
                 .publication;
             let transition = p.apply(event(&p), now)?;
             let mut tx = self.pool.begin().await?;
-            match save(&mut tx, &p, &transition).await {
-                Ok(()) => {
-                    tx.commit().await?;
-                    return Ok(p);
-                }
+            let saved = save(&mut tx, &p, &transition).await;
+            match finish(tx, saved).await {
+                Ok(()) => return Ok(p),
                 Err(DbError::Conflict { .. }) => continue,
                 Err(e) => return Err(e),
             }
@@ -385,46 +384,49 @@ impl PgStore {
         now: DateTime<Utc>,
     ) -> DbResult<PublicationStatus> {
         let mut tx = self.pool.begin().await?;
-        let held = get(&mut tx, id, true)
-            .await?
-            .filter(|h| h.installation == installation)
-            .ok_or_else(|| DbError::not_found("publication", id))?;
-        if held.handover != handover {
-            return Err(DbError::Refused(
-                "that is not the hand-over the runner holds".into(),
-            ));
+        let result = async {
+            let held = get(&mut tx, id, true)
+                .await?
+                .filter(|h| h.installation == installation)
+                .ok_or_else(|| DbError::not_found("publication", id))?;
+            if held.handover != handover {
+                return Err(DbError::Refused(
+                    "that is not the hand-over the runner holds".into(),
+                ));
+            }
+            let subject = id.to_string();
+            if held.publication.owner() == ExecutionOwner::Desktop {
+                let job = jobs::latest_for(&mut tx, &subject).await?;
+                return Ok(status(&held, job.as_ref()));
+            }
+            let open = jobs::open_for_update(&mut tx, &subject).await?;
+            let execution = Execution {
+                job_running: open
+                    .as_ref()
+                    .is_some_and(|j| j.state() == JobState::Running),
+                reached_provider: reached_provider(open.as_ref()),
+            };
+            let mut publication = held.publication.clone();
+            let transition =
+                publication.apply(PublicationEvent::ReturnToDesktop { execution }, now)?;
+            if let Some(mut job) = open.clone() {
+                let loaded = job.version();
+                job.cancel(now)?;
+                jobs::write(&mut tx, &job, loaded).await?;
+            }
+            save(&mut tx, &publication, &transition).await?;
+            let released = HeldPublication {
+                publication,
+                ..held
+            };
+            let job = match open {
+                Some(job) => self.job(job.id()).await?,
+                None => self.latest_job(&subject).await?,
+            };
+            Ok(status(&released, job.as_ref()))
         }
-        let subject = id.to_string();
-        if held.publication.owner() == ExecutionOwner::Desktop {
-            let job = jobs::latest_for(&mut tx, &subject).await?;
-            tx.rollback().await?;
-            return Ok(status(&held, job.as_ref()));
-        }
-        let open = jobs::open_for_update(&mut tx, &subject).await?;
-        let execution = Execution {
-            job_running: open
-                .as_ref()
-                .is_some_and(|j| j.state() == JobState::Running),
-            reached_provider: reached_provider(open.as_ref()),
-        };
-        let mut publication = held.publication.clone();
-        let transition = publication.apply(PublicationEvent::ReturnToDesktop { execution }, now)?;
-        if let Some(mut job) = open.clone() {
-            let loaded = job.version();
-            job.cancel(now)?;
-            jobs::write(&mut tx, &job, loaded).await?;
-        }
-        save(&mut tx, &publication, &transition).await?;
-        tx.commit().await?;
-        let released = HeldPublication {
-            publication,
-            ..held
-        };
-        let job = match open {
-            Some(job) => self.job(job.id()).await?,
-            None => self.latest_job(&subject).await?,
-        };
-        Ok(status(&released, job.as_ref()))
+        .await;
+        finish(tx, result).await
     }
 
     /// After the desktop sent a new credential: publications of `account` waiting for a
@@ -445,28 +447,34 @@ impl PgStore {
         for raw in ids {
             let id = PublicationId::from_uuid(raw);
             let mut tx = self.pool.begin().await?;
-            let Some(held) = get(&mut tx, id, true).await? else {
-                continue;
-            };
-            let mut p = held.publication;
-            let Ok(transition) = p.apply(PublicationEvent::Reauthenticated, now) else {
-                continue;
-            };
-            save(&mut tx, &p, &transition).await?;
-            let subject = id.to_string();
-            match jobs::open_for_update(&mut tx, &subject).await? {
-                Some(mut job) if job.state() == JobState::Paused => {
-                    let loaded = job.version();
-                    job.resume(now, now)?;
-                    jobs::write(&mut tx, &job, loaded).await?;
+            let result = async {
+                let Some(held) = get(&mut tx, id, true).await? else {
+                    return Ok(false);
+                };
+                let mut p = held.publication;
+                let Ok(transition) = p.apply(PublicationEvent::Reauthenticated, now) else {
+                    return Ok(false);
+                };
+                save(&mut tx, &p, &transition).await?;
+                let subject = id.to_string();
+                match jobs::open_for_update(&mut tx, &subject).await? {
+                    Some(mut job) if job.state() == JobState::Paused => {
+                        let loaded = job.version();
+                        job.resume(now, now)?;
+                        jobs::write(&mut tx, &job, loaded).await?;
+                    }
+                    Some(_) => {}
+                    None => {
+                        jobs::insert(&mut tx, &publish_job(&p, now, PUBLISH_MAX_FAILURES, now))
+                            .await?;
+                    }
                 }
-                Some(_) => {}
-                None => {
-                    jobs::insert(&mut tx, &publish_job(&p, now, PUBLISH_MAX_FAILURES, now)).await?;
-                }
+                Ok(true)
             }
-            tx.commit().await?;
-            resumed.push(id);
+            .await;
+            if finish(tx, result).await? {
+                resumed.push(id);
+            }
         }
         Ok(resumed)
     }

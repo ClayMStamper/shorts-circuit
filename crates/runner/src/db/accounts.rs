@@ -7,7 +7,7 @@ use sqlx::types::Json;
 use sqlx::{PgConnection, Row};
 use uuid::Uuid;
 
-use super::{DbError, DbResult, PgStore, to_i64, to_u64};
+use super::{DbError, DbResult, PgStore, finish, to_i64, to_u64};
 use crate::vault::Sealed;
 
 /// A decrypted credential and its revision.
@@ -127,15 +127,18 @@ impl PgStore {
             ));
         }
         let mut tx = self.pool.begin().await?;
-        let owner: Option<Uuid> =
-            sqlx::query_scalar("SELECT installation_id FROM accounts WHERE id = $1 FOR UPDATE")
-                .bind(account.id.as_uuid())
-                .fetch_optional(&mut *tx)
-                .await?;
-        match owner {
-            Some(o) if o != installation => return Err(DbError::not_found("account", account.id)),
-            Some(_) => {
-                sqlx::query(
+        let result = async {
+            let owner: Option<Uuid> =
+                sqlx::query_scalar("SELECT installation_id FROM accounts WHERE id = $1 FOR UPDATE")
+                    .bind(account.id.as_uuid())
+                    .fetch_optional(&mut *tx)
+                    .await?;
+            match owner {
+                Some(o) if o != installation => {
+                    return Err(DbError::not_found("account", account.id));
+                }
+                Some(_) => {
+                    sqlx::query(
                     "UPDATE accounts SET platform = $2, record = $3, updated_at = $4 WHERE id = $1",
                 )
                 .bind(account.id.as_uuid())
@@ -144,70 +147,72 @@ impl PgStore {
                 .bind(now)
                 .execute(&mut *tx)
                 .await?;
-            }
-            None => {
-                sqlx::query(
-                    "INSERT INTO accounts (id, installation_id, platform, record, updated_at) \
+                }
+                None => {
+                    sqlx::query(
+                        "INSERT INTO accounts (id, installation_id, platform, record, updated_at) \
                      VALUES ($1, $2, $3, $4, $5)",
-                )
-                .bind(account.id.as_uuid())
-                .bind(installation)
-                .bind(account.platform.as_str())
-                .bind(Json(account))
-                .bind(now)
-                .execute(&mut *tx)
-                .await?;
+                    )
+                    .bind(account.id.as_uuid())
+                    .bind(installation)
+                    .bind(account.platform.as_str())
+                    .bind(Json(account))
+                    .bind(now)
+                    .execute(&mut *tx)
+                    .await?;
+                }
             }
-        }
-        let current = load(&mut tx, account.id, true).await?;
-        let (revision, updated_by, updated_at, changed) = match current {
-            Some(row) => {
-                let stored = self.open_credential(account.id, &row.sealed)?;
-                if stored == put.credential {
-                    (row.revision, row.updated_by, row.updated_at, false)
-                } else if row.updated_by == CredentialSource::Runner
-                    && put.base_revision.unwrap_or(0) < row.revision
-                {
-                    return Err(DbError::CredentialConflict {
-                        revision: row.revision,
-                    });
-                } else {
-                    let next = row.revision + 1;
+            let current = load(&mut tx, account.id, true).await?;
+            let (revision, updated_by, updated_at, changed) = match current {
+                Some(row) => {
+                    let stored = self.open_credential(account.id, &row.sealed)?;
+                    if stored == put.credential {
+                        (row.revision, row.updated_by, row.updated_at, false)
+                    } else if row.updated_by == CredentialSource::Runner
+                        && put.base_revision.unwrap_or(0) < row.revision
+                    {
+                        return Err(DbError::CredentialConflict {
+                            revision: row.revision,
+                        });
+                    } else {
+                        let next = row.revision + 1;
+                        self.write_credential(
+                            &mut tx,
+                            account.id,
+                            &put.credential,
+                            next,
+                            CredentialSource::Desktop,
+                            now,
+                        )
+                        .await?;
+                        (next, CredentialSource::Desktop, now, true)
+                    }
+                }
+                None => {
                     self.write_credential(
                         &mut tx,
                         account.id,
                         &put.credential,
-                        next,
+                        1,
                         CredentialSource::Desktop,
                         now,
                     )
                     .await?;
-                    (next, CredentialSource::Desktop, now, true)
+                    (1, CredentialSource::Desktop, now, true)
                 }
-            }
-            None => {
-                self.write_credential(
-                    &mut tx,
-                    account.id,
-                    &put.credential,
-                    1,
-                    CredentialSource::Desktop,
-                    now,
-                )
-                .await?;
-                (1, CredentialSource::Desktop, now, true)
-            }
-        };
-        tx.commit().await?;
-        Ok((
-            AccountStatus {
-                account_id: account.id,
-                credential_revision: revision,
-                updated_by,
-                updated_at,
-            },
-            changed,
-        ))
+            };
+            Ok((
+                AccountStatus {
+                    account_id: account.id,
+                    credential_revision: revision,
+                    updated_by,
+                    updated_at,
+                },
+                changed,
+            ))
+        }
+        .await;
+        finish(tx, result).await
     }
 
     pub async fn account(&self, id: AccountId) -> DbResult<Option<ConnectedAccount>> {
@@ -273,24 +278,27 @@ impl PgStore {
         now: DateTime<Utc>,
     ) -> DbResult<Option<u64>> {
         let mut tx = self.pool.begin().await?;
-        let Some(row) = load(&mut tx, account, true).await? else {
-            return Ok(None);
-        };
-        if row.revision != read_revision {
-            return Ok(None);
+        let result = async {
+            let Some(row) = load(&mut tx, account, true).await? else {
+                return Ok(None);
+            };
+            if row.revision != read_revision {
+                return Ok(None);
+            }
+            let next = row.revision + 1;
+            self.write_credential(
+                &mut tx,
+                account,
+                credential,
+                next,
+                CredentialSource::Runner,
+                now,
+            )
+            .await?;
+            Ok(Some(next))
         }
-        let next = row.revision + 1;
-        self.write_credential(
-            &mut tx,
-            account,
-            credential,
-            next,
-            CredentialSource::Runner,
-            now,
-        )
-        .await?;
-        tx.commit().await?;
-        Ok(Some(next))
+        .await;
+        finish(tx, result).await
     }
 
     /// Re-wraps every credential's data key under the current master key. Returns how many
@@ -303,10 +311,13 @@ impl PgStore {
         for id in ids {
             let account = AccountId::from_uuid(id);
             let mut tx = self.pool.begin().await?;
-            let Some(row) = load(&mut tx, account, true).await? else {
-                continue;
-            };
-            if let Some(sealed) = self.vault.rewrap(&row.sealed, &context(account))? {
+            let result = async {
+                let Some(row) = load(&mut tx, account, true).await? else {
+                    return Ok(false);
+                };
+                let Some(sealed) = self.vault.rewrap(&row.sealed, &context(account))? else {
+                    return Ok(false);
+                };
                 sqlx::query(
                     "UPDATE credentials SET key_id = $2, wrapped_key = $3 WHERE account_id = $1",
                 )
@@ -315,9 +326,12 @@ impl PgStore {
                 .bind(&sealed.wrapped_key)
                 .execute(&mut *tx)
                 .await?;
+                Ok(true)
+            }
+            .await;
+            if finish(tx, result).await? {
                 count += 1;
             }
-            tx.commit().await?;
         }
         Ok(count)
     }

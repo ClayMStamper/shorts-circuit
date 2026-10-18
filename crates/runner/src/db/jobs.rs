@@ -8,7 +8,7 @@ use sqlx::postgres::PgRow;
 use sqlx::types::Json;
 use sqlx::{PgConnection, Row};
 
-use super::{DbError, DbResult, PgStore, is_unique_violation, to_i64, to_u32, to_u64};
+use super::{DbError, DbResult, PgStore, finish, is_unique_violation, to_i64, to_u32, to_u64};
 
 const COLUMNS: &str = "id, kind, subject, payload, state, run_at, time_sensitive, claims, \
                        failures, max_failures, lease_owner, lease_expires_at, heartbeat_at, \
@@ -222,6 +222,7 @@ impl PgStore {
         kinds: &[JobKind],
     ) -> DbResult<Option<Job>> {
         let mut tx = self.pool.begin().await?;
+        let result = async {
         let mut sql = format!(
             "SELECT {COLUMNS} FROM jobs j WHERE ((j.state = 'queued' AND j.run_at <= $1) \
              OR (j.state = 'running' AND (j.lease_expires_at IS NULL OR j.lease_expires_at <= $1))) \
@@ -242,15 +243,16 @@ impl PgStore {
             );
         }
         let Some(row) = query.fetch_optional(&mut *tx).await? else {
-            tx.rollback().await?;
             return Ok(None);
         };
         let mut job = decode(&row)?;
         let loaded = job.version();
         job.claim(owner, now, ttl)?;
         write(&mut tx, &job, loaded).await?;
-        tx.commit().await?;
         Ok(Some(job))
+        }
+        .await;
+        finish(tx, result).await
     }
 
     async fn recover(
