@@ -21,6 +21,7 @@ use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
+use sha2::{Digest, Sha384};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;
@@ -38,6 +39,47 @@ pub use tiktok::TikTokPosts;
 pub use variants::Variants;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
+/// SQLx refuses to open a database whose recorded checksum for an applied migration differs from
+/// the file's. Git may check the same migration out with LF or CRLF line endings, which changes
+/// the checksum without changing the migration, so before migrating, a recorded checksum that
+/// matches the current file with only its line endings changed is brought up to date. Any other
+/// difference still fails: shipped migrations must never be edited (add a new one instead).
+async fn reconcile_line_endings(pool: &SqlitePool) -> StoreResult<()> {
+    let applied: Option<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if applied.is_none() {
+        return Ok(());
+    }
+    for migration in MIGRATOR.iter() {
+        let lf = migration.sql.replace("\r\n", "\n");
+        let crlf = lf.replace('\n', "\r\n");
+        for variant in [lf, crlf] {
+            let other = Sha384::digest(variant.as_bytes()).to_vec();
+            if other.as_slice() == migration.checksum.as_ref() {
+                continue;
+            }
+            let updated = sqlx::query(
+                "UPDATE _sqlx_migrations SET checksum = ? WHERE version = ? AND checksum = ?",
+            )
+            .bind(migration.checksum.as_ref())
+            .bind(migration.version)
+            .bind(other)
+            .execute(pool)
+            .await?;
+            if updated.rows_affected() > 0 {
+                tracing::info!(
+                    version = migration.version,
+                    "migration checksum updated after a line-ending-only change"
+                );
+            }
+        }
+    }
+    Ok(())
+}
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -112,6 +154,7 @@ impl Store {
             .max_connections(8)
             .connect_with(options)
             .await?;
+        reconcile_line_endings(&pool).await?;
         MIGRATOR.run(&pool).await?;
         Ok(Self { pool })
     }
