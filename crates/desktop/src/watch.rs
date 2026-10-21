@@ -203,6 +203,8 @@ async fn settle_loop(
                     consider(path, &seen, &mut pending);
                 }
                 app.record_watch_check().await;
+                // Items that waited for their TikTok caption may be due now.
+                app.apply_deferred_rules().await;
             }
             done = scans.recv() => {
                 let Some(done) = done else { continue };
@@ -210,6 +212,7 @@ async fn settle_loop(
                     consider(path, &seen, &mut pending);
                 }
                 app.record_watch_check().await;
+                app.apply_deferred_rules().await;
                 let _ = done.send(());
             }
             _ = ticker.tick() => {

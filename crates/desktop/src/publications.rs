@@ -27,6 +27,16 @@ const SLOT_HORIZON_DAYS: u32 = 28;
 /// The person approving. There is one user per desktop library for now.
 pub(crate) const APPROVER: &str = "owner";
 
+/// What review flags for a publication (see [`App::checks`]).
+pub(crate) struct Checks {
+    pub(crate) video_path: Option<String>,
+    pub(crate) issues: Vec<ValidationIssue>,
+    pub(crate) warnings: Vec<String>,
+    pub(crate) can_approve: bool,
+    /// Video permission is recorded as denied, which no workflow overrides.
+    pub(crate) video_denied: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(
     tag = "kind",
@@ -175,12 +185,31 @@ impl App {
     /// should block or worry the reviewer.
     pub async fn review(&self, id: PublicationId) -> AppResult<ReviewView> {
         let p = self.store.publications().require(id).await?;
+        let checks = self.checks(&p).await?;
         let content = p.content();
         let account = self
             .store
             .accounts()
             .require(content.destination.account_id)
             .await?;
+        let variant = self.store.variants().require(content.variant_id).await?;
+        Ok(ReviewView {
+            publication: self.publication_view(&p).await?,
+            account: AccountView::from(&account),
+            variant: self.variant_view(&variant).await?,
+            video_path: checks.video_path,
+            full_caption: full_caption(&content.caption, &content.hashtags),
+            issue_text: checks.issues.iter().map(ToString::to_string).collect(),
+            issues: checks.issues,
+            warnings: checks.warnings,
+            can_approve: checks.can_approve,
+        })
+    }
+
+    /// What review would flag for `p`: blocking issues, warnings, and whether it can be
+    /// approved now.
+    pub(crate) async fn checks(&self, p: &Publication) -> AppResult<Checks> {
+        let content = p.content();
         let variant = self.store.variants().require(content.variant_id).await?;
         let asset = self.store.assets().require(p.asset_id()).await?;
         let media = self
@@ -244,16 +273,12 @@ impl App {
             && p.schedule().is_some()
             && rendered.is_some()
             && !stale_media;
-        Ok(ReviewView {
-            publication: self.publication_view(&p).await?,
-            account: AccountView::from(&account),
-            variant: self.variant_view(&variant).await?,
+        Ok(Checks {
             video_path: rendered.map(|r| r.path.clone()),
-            full_caption: full_caption(&content.caption, &content.hashtags),
-            issue_text: issues.iter().map(ToString::to_string).collect(),
             issues,
             warnings,
             can_approve,
+            video_denied: asset.video_permission.status == PermissionStatus::Denied,
         })
     }
 
@@ -320,6 +345,64 @@ impl App {
     pub async fn cancel_publication(&self, id: PublicationId) -> AppResult<PublicationView> {
         let p = self.transition(id, |_| PublicationEvent::Cancel).await?;
         self.publication_view(&p).await
+    }
+
+    /// "Publish now": a publication waiting for review is approved (as the owner) to go out
+    /// now; an approved one is moved to now. Needs the rendered video.
+    pub async fn publish_now(&self, id: PublicationId) -> AppResult<PublicationView> {
+        let current = self.store.publications().require(id).await?;
+        let now_schedule = ScheduleInput::Now;
+        match current.state() {
+            PublicationState::AwaitingApproval => {
+                self.schedule(id, now_schedule).await?;
+                let p = self.store.publications().require(id).await?;
+                self.approve(id, p.revision().number).await
+            }
+            PublicationState::Draft => {
+                self.submit_for_review(id).await?;
+                Box::pin(self.publish_now(id)).await
+            }
+            _ => self.schedule(id, now_schedule).await,
+        }
+    }
+
+    /// Posts the same video and copy to the same destination again, as a new publication
+    /// approved by the owner to go out now (e.g. after deleting the first post, or to undo a
+    /// Skip).
+    pub async fn republish(&self, id: PublicationId) -> AppResult<PublicationView> {
+        let original = self.store.publications().require(id).await?;
+        let content = original.content().clone();
+        let variant = self.store.variants().require(content.variant_id).await?;
+        let mut fresh = RevisionContent::new(
+            variant.id,
+            variant.revision(),
+            &content.caption,
+            &content.hashtags,
+            content.destination,
+        )?;
+        fresh.options = content.options.clone();
+        let publication = Publication::draft(original.asset_id(), fresh, None, self.now());
+        self.store.publications().insert(&publication).await?;
+        self.emit(AppEvent::PublicationChanged {
+            id: publication.id().to_string(),
+        });
+        self.render_variant(variant.id).await?;
+        let rendered = self
+            .store
+            .variants()
+            .require(variant.id)
+            .await?
+            .render()
+            .is_some_and(|r| std::path::Path::new(&r.path).is_file());
+        if rendered {
+            self.publish_now(publication.id()).await
+        } else {
+            // Waits for the render; Publish now / Approve finish it.
+            let p = self
+                .transition(publication.id(), |_| PublicationEvent::SubmitForReview)
+                .await?;
+            self.schedule(p.id(), ScheduleInput::Now).await
+        }
     }
 
     pub async fn retry_publication(&self, id: PublicationId) -> AppResult<PublicationView> {
@@ -588,6 +671,28 @@ impl App {
         } else {
             None
         };
+        let blockers = if p.state() == PublicationState::AwaitingApproval {
+            match self.checks(p).await {
+                Ok(c) => c.issues.iter().map(ToString::to_string).collect(),
+                Err(_) => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+        let rendering = p.state() == PublicationState::AwaitingApproval
+            && self
+                .store
+                .jobs()
+                .open_for(JobKind::RenderVariant, &content.variant_id.to_string())
+                .await?
+                .is_some();
+        let published_private = is_private(p);
+        let (status_label, tone) = status_label(
+            p,
+            &blockers,
+            rendering,
+            progress.as_ref().and_then(|g| g.fraction),
+        );
         Ok(PublicationView {
             id: p.id().to_string(),
             asset_id: p.asset_id().to_string(),
@@ -615,11 +720,59 @@ impl App {
             progress_fraction: progress.as_ref().and_then(|g| g.fraction),
             progress_text: progress.and_then(|g| g.detail),
             status_text: status_text(p, &account_name),
+            status_label,
+            tone,
+            approved_by: p.approval().map(|a| a.approved_by.clone()),
+            blockers,
+            published_private,
             actions: actions(p, crate::cloud::settings(self).await?.enabled),
             owner: p.owner(),
             cloud_note: self.cloud_note(p.id()),
             updated_at: p.record().updated_at,
         })
+    }
+}
+
+/// A YouTube upload that ended up private: it is on the channel, but not published.
+fn is_private(p: &Publication) -> bool {
+    p.platform() == shorts_domain::Platform::YoutubeShorts
+        && p.published()
+            .and_then(|r| r.note.as_deref())
+            .is_some_and(|n| n.to_lowercase().contains("private"))
+}
+
+/// The short status pill ("Published", "Processing 40%", …) and its tone.
+fn status_label(
+    p: &Publication,
+    blockers: &[String],
+    rendering: bool,
+    progress: Option<f64>,
+) -> (String, &'static str) {
+    use PublicationState as S;
+    let not_rendered = ValidationIssue::NotRendered.to_string();
+    match p.state() {
+        S::Draft => ("Draft".into(), "muted"),
+        S::AwaitingApproval if rendering || blockers == [not_rendered.clone()] => {
+            ("Preparing video".into(), "info")
+        }
+        S::AwaitingApproval if !blockers.is_empty() => ("Needs attention".into(), "warn"),
+        S::AwaitingApproval => ("Waiting for review".into(), "warn"),
+        S::Scheduled => ("Scheduled".into(), "info"),
+        S::Preparing | S::Uploading | S::Processing | S::Publishing => match progress {
+            Some(f) => (format!("Processing {:.0}%", f * 100.0), "info"),
+            None => ("Processing".into(), "info"),
+        },
+        S::Published if is_private(p) => ("Uploaded (private)".into(), "warn"),
+        S::Published if p.published().is_some_and(|r| r.manual) => {
+            ("Posted manually".into(), "good")
+        }
+        S::Published => ("Published".into(), "good"),
+        S::RetryScheduled => ("Retrying".into(), "warn"),
+        S::NeedsAuthentication => ("Needs reconnect".into(), "bad"),
+        S::NeedsUserAction => ("Needs you".into(), "warn"),
+        S::OutcomeUnknown => ("Check the platform".into(), "bad"),
+        S::Failed => ("Failed".into(), "bad"),
+        S::Cancelled => ("Skipped".into(), "muted"),
     }
 }
 
@@ -654,6 +807,11 @@ fn status_text(p: &Publication, account: &str) -> String {
         S::Uploading => "Uploading…".into(),
         S::Processing => "Waiting for the platform to process the video…".into(),
         S::Publishing => "Publishing…".into(),
+        S::Published if is_private(p) => format!(
+            "Uploaded to {} as private, so only you can see it. Make it public in YouTube Studio \
+             (Content → Visibility), or switch the channel to public uploads in Connections.",
+            account
+        ),
         S::Published => match p.published() {
             Some(r) => match (&r.url, r.manual) {
                 (Some(url), true) => format!("Posted manually: {url}"),
@@ -752,6 +910,7 @@ fn actions(p: &Publication, cloud_enabled: bool) -> Vec<Action> {
         S::AwaitingApproval => vec![
             A::Review,
             A::Approve,
+            A::PublishNow,
             A::Edit,
             A::Reschedule,
             A::ExportPackage,
@@ -767,8 +926,9 @@ fn actions(p: &Publication, cloud_enabled: bool) -> Vec<Action> {
             A::Cancel,
         ],
         S::Preparing | S::Uploading | S::Processing => vec![A::Cancel],
-        S::Publishing | S::Cancelled => vec![],
-        S::Published => vec![A::ExportPackage],
+        S::Publishing => vec![],
+        S::Cancelled => vec![A::Republish],
+        S::Published => vec![A::Republish, A::ExportPackage],
         S::RetryScheduled => vec![A::Edit, A::RevokeApproval, A::Cancel],
         S::NeedsAuthentication => vec![A::Reconnect, A::Edit, A::RevokeApproval, A::Cancel],
         S::NeedsUserAction => match p.user_action() {

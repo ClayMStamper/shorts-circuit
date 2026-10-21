@@ -79,6 +79,15 @@ struct Source {
     needs_reconnect: bool,
 }
 
+/// Whether new-post detection is on and signed in, read from settings (so the core can tell
+/// without the connector).
+pub(crate) async fn detection_active(app: &App) -> AppResult<bool> {
+    let settings = app.store.settings();
+    let enabled = settings.get::<bool>(ENABLED_KEY).await?.unwrap_or(false);
+    let source: Option<Source> = settings.get(SOURCE_KEY).await?;
+    Ok(enabled && source.is_some_and(|s| !s.needs_reconnect))
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 struct StoredTokens {
     access_token: String,
@@ -451,6 +460,10 @@ impl TikTokIntake {
             Ok(new_posts) => {
                 source.last_error = None;
                 self.save_source(&source).await?;
+                // Workflows publish without anyone confirming matches, so unambiguous ones are
+                // merged now; then items that waited for their caption go out.
+                self.app.auto_match().await;
+                self.app.apply_deferred_rules().await;
                 let suggestions = self.app.match_suggestions().await?.len();
                 if new_posts > 0 && suggestions > 0 {
                     self.app.emit(AppEvent::MatchSuggested { asset_id: None });

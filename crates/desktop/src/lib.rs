@@ -35,6 +35,7 @@ pub mod tiktok;
 mod variants;
 pub mod views;
 pub mod watch;
+mod workflows;
 pub mod youtube;
 
 pub use app::App;
@@ -46,3 +47,4 @@ pub use media::{FfmpegBackend, MediaBackend, RenderOutcome};
 pub use paths::AppPaths;
 pub use preferences::{Preferences, PreferencesUpdate};
 pub use publications::{EditPublication, NewPublication, ScheduleInput};
+pub use workflows::{CAPTION_WAIT_MINUTES, NewWorkflow, SOURCE_COLLECTION_NAME, WorkflowUpdate};

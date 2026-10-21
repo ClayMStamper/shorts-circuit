@@ -4,13 +4,16 @@
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use shorts_domain::copy;
 use shorts_domain::{
     AccountId, ApprovalMode, AssetId, AssetStatus, Collection, CollectionId, CollectionRule,
-    Destination, Publication, PublicationEvent, PublicationId, PublicationState, RevisionContent,
-    RuleFiring, RuleId, RuleOutput, RuleSpec, Schedule, UnattendedGrant, approval_mode,
+    Destination, PostingMode, Publication, PublicationEvent, PublicationId, PublicationState,
+    RevisionContent, RuleFiring, RuleId, RuleOutput, RuleSpec, Schedule, UnattendedGrant,
+    approval_mode,
 };
 use tracing::{info, warn};
 
+use crate::ScheduleInput;
 use crate::app::App;
 use crate::error::{AppError, AppResult};
 use crate::events::AppEvent;
@@ -275,6 +278,23 @@ impl App {
                 if !rule.applies_to(entered_at, source_posted_at) {
                     continue;
                 }
+                let workflow = self.workflow_for_rule(rule.id).await?;
+                if workflow.is_some() {
+                    // A new file without a caption waits briefly for its TikTok post;
+                    // `apply_deferred_rules` comes back for it.
+                    let current = self.store.assets().require(asset_id).await?;
+                    if self.caption_wait_until(&current).await?.is_some() {
+                        continue;
+                    }
+                    if workflow
+                        .as_ref()
+                        .is_some_and(|w| w.rights_confirmed_at.is_some())
+                    {
+                        self.grant_rights_for(asset_id, &rule.spec.name).await;
+                    }
+                }
+                // Re-read: the caption may have come from a match, permissions from a workflow.
+                let asset = self.store.assets().require(asset_id).await?;
                 for account_id in &rule.spec.destinations {
                     if self
                         .store
@@ -294,22 +314,50 @@ impl App {
                         .grant(collection.id, account.id)
                         .await?;
                     let mode = approval_mode(grant.as_ref(), &account);
-                    let content = RevisionContent::new(
-                        variant.id,
-                        variant.revision(),
-                        &rule.caption_for(&asset),
-                        &rule.hashtags_for(&asset),
-                        Destination {
-                            account_id: account.id,
-                            platform: account.platform,
+                    let destination = Destination {
+                        account_id: account.id,
+                        platform: account.platform,
+                    };
+                    let caption = rule.caption_for(&asset);
+                    let hashtags = rule.hashtags_for(&asset);
+                    let content = match &workflow {
+                        // Workflows take the source's caption and hashtags and fit them to the
+                        // destination, so review has nothing to flag.
+                        Some(w) => {
+                            let fitted = copy::fit(
+                                account.platform,
+                                &copy::from_source(&caption, &hashtags),
+                            );
+                            let mut content = RevisionContent::new(
+                                variant.id,
+                                variant.revision(),
+                                &fitted.caption,
+                                &fitted.hashtags,
+                                destination,
+                            )?;
+                            content.options = w.settings.destination_options(account.platform);
+                            content
+                        }
+                        None => RevisionContent::new(
+                            variant.id,
+                            variant.revision(),
+                            &caption,
+                            &hashtags,
+                            destination,
+                        )?,
+                    };
+                    let slot = self.next_slot(account.id).await?;
+                    let at = match &workflow {
+                        // As soon as possible, or the next free slot (now when none is free).
+                        Some(w) => match w.settings.posting {
+                            PostingMode::Asap => Some(self.now()),
+                            PostingMode::Slots => slot.or_else(|| Some(self.now())),
                         },
-                    )?;
-                    // No free slot (e.g. none configured) leaves it unscheduled; approval then
-                    // waits for the user to pick a time.
-                    let schedule = self
-                        .next_slot(account.id)
-                        .await?
-                        .map(|at| Schedule::new(at, prefs.timezone));
+                        // No free slot (e.g. none configured) leaves it unscheduled; approval
+                        // then waits for the user to pick a time.
+                        None => slot,
+                    };
+                    let schedule = at.map(|at| Schedule::new(at, prefs.timezone));
                     let publication = Publication::draft(asset_id, content, schedule, self.now());
                     let firing = RuleFiring {
                         rule_id: rule.id,
@@ -338,10 +386,12 @@ impl App {
                 }
             }
         }
-        if unattended {
-            // The rule can approve only rendered media; this queues the render (or finds it
-            // done) and approves once it is ready.
+        if !created.is_empty() {
+            // Render right away so review (or the unattended approval below, which needs
+            // rendered media) doesn't wait for anyone to press Render.
             self.render_variant(variant.id).await?;
+        }
+        if unattended {
             self.unattended_approvals(asset_id).await?;
         }
         Ok(created)
@@ -363,14 +413,22 @@ impl App {
     /// rendered and the review shows no issues. Anything else is left for the user.
     pub(crate) async fn unattended_approvals(&self, asset_id: AssetId) -> AppResult<()> {
         for firing in self.store.collections().firings_for_asset(asset_id).await? {
-            if !firing.unattended || firing.auto_approved_at.is_some() {
+            if firing.auto_approved_at.is_some() {
+                continue;
+            }
+            // A workflow follows its current Auto Publish switch (turning it on approves what
+            // it was holding); a plain rule only what it created under a grant.
+            let workflow = self.workflow_for_rule(firing.rule_id).await?;
+            if !firing.unattended && workflow.is_none() {
                 continue;
             }
             let Some(p) = self.store.publications().get(firing.publication_id).await? else {
                 continue;
             };
+            // Only the revision the rule created: an edit by hand goes back to the owner.
             if p.state() != PublicationState::AwaitingApproval
                 || p.content().destination.account_id != firing.account_id
+                || p.revision().number != 1
             {
                 continue;
             }
@@ -386,8 +444,17 @@ impl App {
             if approval_mode(grant.as_ref(), &account) != ApprovalMode::Unattended {
                 continue;
             }
-            let review = self.review(p.id()).await?;
-            if !review.can_approve || !review.issues.is_empty() {
+            // An "as soon as possible" time that passed while rendering moves to now, so the
+            // overdue policy doesn't expire it.
+            let asap = workflow
+                .as_ref()
+                .is_some_and(|w| w.settings.posting == PostingMode::Asap);
+            if asap && p.schedule().is_none_or(|s| s.at < self.now()) {
+                self.schedule(p.id(), ScheduleInput::Now).await?;
+            }
+            let p = self.store.publications().require(p.id()).await?;
+            let checks = self.checks(&p).await?;
+            if !checks.can_approve || !checks.issues.is_empty() || checks.video_denied {
                 continue;
             }
             if !self
@@ -398,7 +465,10 @@ impl App {
             {
                 continue;
             }
-            let by = format!("rule:{}", rule.spec.name);
+            let by = match &workflow {
+                Some(_) => shorts_domain::workflow::approver(&rule.spec.name),
+                None => format!("rule:{}", rule.spec.name),
+            };
             match self.approve_as(p.id(), p.revision().number, &by).await {
                 Ok(_) => info!(publication = %p.id(), rule = %rule.id, "approved unattended"),
                 Err(e) => warn!(publication = %p.id(), error = %e, "unattended approval failed"),
@@ -499,7 +569,7 @@ impl App {
         Ok(RuleActivityView { rule: view, items })
     }
 
-    async fn rule_item(
+    pub(crate) async fn rule_item(
         &self,
         asset_id: AssetId,
         publications: Vec<PublicationId>,
@@ -523,6 +593,8 @@ impl App {
         }
         Ok(RuleItemView {
             asset_id: asset_id.to_string(),
+            added_at: asset.as_ref().map_or_else(|| self.now(), |a| a.created_at),
+            waiting_reason: None,
             title: asset.as_ref().map(|a| a.title.clone()).unwrap_or_default(),
             caption: asset.map(|a| a.notes).unwrap_or_default(),
             duration_ms,
