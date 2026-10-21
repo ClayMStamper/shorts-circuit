@@ -13,6 +13,7 @@ import type {
   CollectionView,
   ConnectProgress,
   EditPublication,
+  GetOriginal,
   ImportResult,
   InstagramLogin,
   InstagramPages,
@@ -220,7 +221,10 @@ export const api = {
   updatePreferences: (update: PreferencesUpdate) => call<Preferences>("update_preferences", { update }),
   checkWatchFolder: () => call<Preferences>("check_watch_folder"),
   /** Opens a waiting TikTok post and expects its downloaded video. */
-  getOriginal: (assetId: string) => call<void>("get_original", { assetId }),
+  getOriginal: (assetId: string) => call<GetOriginal>("get_original", { assetId }),
+  cancelGetOriginal: (assetId: string) => call<void>("cancel_get_original", { assetId }),
+  /** "Pick file…": attaches a chosen video to a waiting item. */
+  attachOriginal: (assetId: string, path: string) => call<void>("attach_original", { assetId, path }),
   defaultDownloadsFolder: () => call<string | null>("default_downloads_folder"),
   mediaStatus: () => call<MediaStatus>("media_status"),
   openFolder: (path: string) => call<void>("open_folder", { path }),

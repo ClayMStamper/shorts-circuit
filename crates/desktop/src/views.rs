@@ -330,6 +330,10 @@ pub struct RuleItemView {
     pub source_posted_at: Option<DateTime<Utc>>,
     /// The original post (e.g. its TikTok link), when known; https only.
     pub source_url: Option<String>,
+    /// "Get original" was clicked: a matching download is expected until then.
+    pub expecting_original_until: Option<DateTime<Utc>>,
+    /// Why a download wasn't taken for this post, e.g. a different length.
+    pub download_note: Option<String>,
     /// In the collection, but its original file hasn't arrived yet.
     pub waiting_for_media: bool,
     /// Why nothing has been created for it yet, e.g. waiting for its TikTok caption.

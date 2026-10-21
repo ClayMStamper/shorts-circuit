@@ -47,6 +47,17 @@ fn downloads(h: &Harness) -> std::path::PathBuf {
     dir
 }
 
+async fn activity_item(h: &Harness, id: AssetId) -> shorts_desktop::views::RuleItemView {
+    h.app
+        .activity(50)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|i| i.asset_id == id.to_string())
+        .expect("the item is in Activity")
+}
+
 async fn library_count(h: &Harness) -> usize {
     h.app
         .list_assets(&LibraryQuery::default())
@@ -177,4 +188,64 @@ async fn the_downloads_watch_only_takes_new_files_that_fit() {
         AssetStatus::Ready
     );
     assert_eq!(library_count(&h).await, 1, "the old file was not imported");
+}
+
+#[tokio::test]
+async fn waiting_status_notes_and_cancel() {
+    let h = harness().await;
+    // 30 s post; the fake media backend reports 20 s for any file.
+    let post = pending_post(&h, "7010", 1, 30_000).await;
+    h.app.expect_original(post).await.unwrap();
+    let file = downloads(&h).join("Download (3).mp4");
+    std::fs::write(&file, b"a different video").unwrap();
+    assert_eq!(h.app.import_download(&file).await.unwrap(), None);
+
+    let item = activity_item(&h, post).await;
+    let until = item.expecting_original_until.expect("still waiting");
+    assert_eq!(until, t0() + ChronoDuration::minutes(30));
+    let note = item
+        .download_note
+        .expect("the skipped download is explained");
+    assert!(
+        note.contains("Download (3).mp4") && note.contains("20 s") && note.contains("30 s"),
+        "{note}"
+    );
+
+    h.app.cancel_expect_original(post).await.unwrap();
+    let item = activity_item(&h, post).await;
+    assert!(item.expecting_original_until.is_none() && item.download_note.is_none());
+}
+
+#[tokio::test]
+async fn pick_file_attaches_any_video_and_announces_it() {
+    let h = harness().await;
+    // The picked file's length doesn't matter: the owner chose it.
+    let post = pending_post(&h, "7011", 24 * 30, 90_000).await;
+    let mut rx = h.app.subscribe();
+    let file = downloads(&h).join("Download (2).mp4");
+    std::fs::write(&file, b"picked by hand").unwrap();
+    assert_eq!(h.app.attach_original(post, &file).await.unwrap(), post);
+    let asset = h.app.store().assets().require(post).await.unwrap();
+    assert_eq!(asset.status, AssetStatus::Ready);
+    assert!(
+        h.app
+            .store()
+            .tiktok_posts()
+            .pending()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let announced = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let AppEvent::OriginalAttached { asset_id, title } = rx.recv().await.unwrap() {
+                return (asset_id, title);
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(announced, (post.to_string(), "Post 7011".to_owned()));
+    // It already has its video now.
+    assert!(h.app.attach_original(post, &file).await.is_err());
 }

@@ -793,23 +793,82 @@ pub async fn cancel_job(shell: State<'_, Shell>, id: JobId) -> Result<()> {
     shell.app.cancel_job(id).await
 }
 
-/// "Get original": opens a waiting TikTok post in the browser and expects its video in the
-/// downloads folder (TikTok's own "Download video").
-#[tauri::command]
-pub async fn get_original(shell: State<'_, Shell>, asset_id: AssetId) -> Result<()> {
-    let url = shell.app.expect_original(asset_id).await?;
-    let url = https_link(&url)?;
-    open_external(&url)
+/// What "Get original" did, for the UI to say.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetOriginal {
+    /// The folder a download is picked up from (`None`: no downloads folder could be found).
+    pub downloads_folder: Option<String>,
+    /// Picking up downloads was off and has just been turned on.
+    pub enabled_now: bool,
 }
 
-/// The OS downloads folder, to offer as the folder to watch for TikTok originals.
-#[tauri::command]
-pub fn default_downloads_folder(app: tauri::AppHandle) -> Option<String> {
+fn os_downloads_folder(app: &tauri::AppHandle) -> Option<String> {
     use tauri::Manager;
     app.path()
         .download_dir()
         .ok()
         .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// "Get original": opens a waiting TikTok post in the browser and expects its video in the
+/// downloads folder (TikTok's own "Download video"). Turns picking up downloads on (the OS
+/// downloads folder) if it was off, since that's what the owner is asking for.
+#[tauri::command]
+pub async fn get_original(
+    app: tauri::AppHandle,
+    shell: State<'_, Shell>,
+    asset_id: AssetId,
+) -> Result<GetOriginal> {
+    let url = shell.app.expect_original(asset_id).await?;
+    let url = https_link(&url)?;
+    let mut result = GetOriginal {
+        downloads_folder: shell.app.preferences().await?.downloads_folder,
+        enabled_now: false,
+    };
+    if result.downloads_folder.is_none()
+        && let Some(folder) = os_downloads_folder(&app)
+    {
+        shell
+            .app
+            .update_preferences(PreferencesUpdate {
+                downloads_folder: Some(Some(folder.clone())),
+                ..Default::default()
+            })
+            .await?;
+        shell.restart_watch(&app).await;
+        result = GetOriginal {
+            downloads_folder: Some(folder),
+            enabled_now: true,
+        };
+    }
+    open_external(&url)?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn cancel_get_original(shell: State<'_, Shell>, asset_id: AssetId) -> Result<()> {
+    shell.app.cancel_expect_original(asset_id).await
+}
+
+/// "Pick file…": attaches a chosen video to a waiting item.
+#[tauri::command]
+pub async fn attach_original(
+    shell: State<'_, Shell>,
+    asset_id: AssetId,
+    path: String,
+) -> Result<()> {
+    shell
+        .app
+        .attach_original(asset_id, std::path::Path::new(&path))
+        .await?;
+    Ok(())
+}
+
+/// The OS downloads folder, to offer as the folder to watch for TikTok originals.
+#[tauri::command]
+pub fn default_downloads_folder(app: tauri::AppHandle) -> Option<String> {
+    os_downloads_folder(&app)
 }
 
 #[tauri::command]

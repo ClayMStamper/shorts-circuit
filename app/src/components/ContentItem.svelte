@@ -6,7 +6,7 @@
 <script lang="ts">
   import { api } from "../lib/api";
   import { approverLabel, formatDate, formatDateTime, formatDuration, timeAgo, toLocalInput } from "../lib/format";
-  import { fileUrl } from "../lib/tauri";
+  import { VIDEO_EXTENSIONS, fileUrl, pickFiles } from "../lib/tauri";
   import type { PublicationView, RuleItemView } from "../lib/types";
   import Pill from "./ui/Pill.svelte";
   import PlatformIcon from "./ui/PlatformIcon.svelte";
@@ -71,6 +71,29 @@
     run(() => api.cancelPublication(p.id), "Skipped");
   }
 
+  async function getOriginal() {
+    busy = true;
+    try {
+      const r = await api.getOriginal(item.assetId);
+      toast(
+        r.enabledNow
+          ? `Now watching ${r.downloadsFolder} for it. Right-click the video on TikTok → Download video.`
+          : "Right-click the video on TikTok → Download video; it's picked up from your downloads.",
+        "info",
+      );
+      onChanged?.();
+    } catch (e) {
+      errorToast(e);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function pickOriginal() {
+    const [path] = await pickFiles({ multiple: false, extensions: VIDEO_EXTENSIONS, name: "Video" });
+    if (path) await run(() => api.attachOriginal(item.assetId, path));
+  }
+
   const caption = $derived(item.caption.trim() || item.title);
   const sourceLabel = $derived(item.sourceUrl?.includes("tiktok.com") ? "Open on TikTok" : "Open original");
   const when = $derived(
@@ -92,17 +115,37 @@
       {/if}
     </span>
     {#if item.waitingForMedia}
-      <p class="callout" style="padding: 6px 10px">
-        Waiting for the original file.
-        {#if item.sourceUrl}
-          <button class="link" data-testid="get-original" disabled={busy} onclick={() => run(() => api.getOriginal(item.assetId))}>
-            Get original ↗
-          </button>
-          then right-click the video → <strong>Download video</strong>; it's picked up from your downloads folder.
+      <div class="callout" style="padding: 6px 10px" data-testid="waiting-original">
+        {#if item.expectingOriginalUntil}
+          <p>
+            <span class="spinner" aria-hidden="true"></span>
+            <strong>Waiting for your download</strong> (until {formatDateTime(item.expectingOriginalUntil)}): right-click
+            the video on TikTok → <strong>Download video</strong>.
+          </p>
         {:else}
-          Save it to your watch folder.
+          <p>
+            Waiting for the original file.
+            {#if item.sourceUrl}
+              Click <strong>Get original</strong>, then right-click the video on TikTok → <strong>Download video</strong>.
+            {:else}
+              Save it to your watch folder, or pick it.
+            {/if}
+          </p>
         {/if}
-      </p>
+        {#if item.downloadNote}<p class="reason" data-testid="download-note">{item.downloadNote}</p>{/if}
+        <div class="btn-row">
+          {#if item.sourceUrl && !item.expectingOriginalUntil}
+            <button class="primary small" data-testid="get-original" disabled={busy} onclick={getOriginal}>Get original ↗</button>
+          {/if}
+          {#if item.expectingOriginalUntil}
+            <button class="small" data-testid="reopen-original" disabled={busy} onclick={getOriginal}>Open post again ↗</button>
+            <button class="small ghost" data-testid="cancel-original" disabled={busy} onclick={() => run(() => api.cancelGetOriginal(item.assetId))}>
+              Stop waiting
+            </button>
+          {/if}
+          <button class="small" data-testid="pick-original" disabled={busy} onclick={pickOriginal}>Pick file…</button>
+        </div>
+      </div>
     {:else if item.waitingReason}
       <p class="muted">{item.waitingReason}</p>
     {/if}

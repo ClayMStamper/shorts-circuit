@@ -597,6 +597,15 @@ impl App {
                 views.push(self.publication_view(&p).await?);
             }
         }
+        let (expecting_original_until, download_note) = post
+            .as_ref()
+            .map(|p| {
+                (
+                    self.expected_until(&p.video_id),
+                    self.download_note(&p.video_id),
+                )
+            })
+            .unwrap_or_default();
         let source_url = post
             .as_ref()
             .and_then(|p| p.share_url.clone())
@@ -611,6 +620,8 @@ impl App {
             duration_ms,
             source_posted_at: post.map(|p| p.posted_at),
             source_url,
+            expecting_original_until,
+            download_note,
             waiting_for_media,
             publications: views,
         })
