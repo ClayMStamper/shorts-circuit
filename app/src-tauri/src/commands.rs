@@ -752,8 +752,18 @@ fn https_link(url: &str) -> Result<String> {
 }
 
 /// Opens a web page in the default browser. The URL is one argument, never shell-parsed.
+///
+/// On Windows this goes through the URL protocol handler rather than `explorer`, which
+/// misreads long URLs with query strings (such as OAuth consent pages) and opens a folder.
 fn open_external(url: &str) -> Result<()> {
-    std::process::Command::new(opener()).arg(url).spawn()?;
+    if cfg!(windows) {
+        std::process::Command::new("rundll32.exe")
+            .arg("url.dll,FileProtocolHandler")
+            .arg(url)
+            .spawn()?;
+    } else {
+        std::process::Command::new(opener()).arg(url).spawn()?;
+    }
     Ok(())
 }
 
