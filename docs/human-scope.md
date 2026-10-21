@@ -372,6 +372,17 @@ caption file next to it with the same name: `.txt` (the caption, hashtags inline
 (`caption` or `description`, and `hashtags` as a list).
 Prefer the original export over a video saved back from TikTok, which carries a watermark.
 
+### Originals downloaded from TikTok
+
+When a detected TikTok post is waiting for its original and you don't have the file handy,
+TikTok's own player can download it. Turn on **Connections → Source → Also pick up originals I
+download from TikTok** (it uses your downloads folder). Then on the waiting video click **Get
+original ↗**, right-click the video on TikTok → **Download video**, and the app attaches the
+download to that post (its caption, link and workflows). Only videos that fit a pending post are
+taken; everything else in the downloads folder is left alone. The click stays yours: the app
+doesn't automate TikTok's site, which its terms don't allow. Check the first download for a
+TikTok watermark; other platforms may show watermarked reposts to fewer people.
+
 ## Accounts and sign-ins
 
 - Developer accounts: Google Cloud, Meta for Developers, Snapchat Ads Manager (Business

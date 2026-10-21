@@ -793,6 +793,25 @@ pub async fn cancel_job(shell: State<'_, Shell>, id: JobId) -> Result<()> {
     shell.app.cancel_job(id).await
 }
 
+/// "Get original": opens a waiting TikTok post in the browser and expects its video in the
+/// downloads folder (TikTok's own "Download video").
+#[tauri::command]
+pub async fn get_original(shell: State<'_, Shell>, asset_id: AssetId) -> Result<()> {
+    let url = shell.app.expect_original(asset_id).await?;
+    let url = https_link(&url)?;
+    open_external(&url)
+}
+
+/// The OS downloads folder, to offer as the folder to watch for TikTok originals.
+#[tauri::command]
+pub fn default_downloads_folder(app: tauri::AppHandle) -> Option<String> {
+    use tauri::Manager;
+    app.path()
+        .download_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 pub async fn preferences(shell: State<'_, Shell>) -> Result<Preferences> {
     shell.app.preferences().await
@@ -804,7 +823,7 @@ pub async fn update_preferences(
     shell: State<'_, Shell>,
     update: PreferencesUpdate,
 ) -> Result<Preferences> {
-    let restart_watch = update.watch_folder.is_some();
+    let restart_watch = update.watch_folder.is_some() || update.downloads_folder.is_some();
     let prefs = shell.app.update_preferences(update).await?;
     if restart_watch {
         shell.restart_watch(&app).await;

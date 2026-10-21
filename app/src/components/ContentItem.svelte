@@ -93,7 +93,15 @@
     </span>
     {#if item.waitingForMedia}
       <p class="callout" style="padding: 6px 10px">
-        Waiting for the original file: save it to your watch folder. TikTok doesn't let apps download your videos.
+        Waiting for the original file.
+        {#if item.sourceUrl}
+          <button class="link" data-testid="get-original" disabled={busy} onclick={() => run(() => api.getOriginal(item.assetId))}>
+            Get original ↗
+          </button>
+          then right-click the video → <strong>Download video</strong>; it's picked up from your downloads folder.
+        {:else}
+          Save it to your watch folder.
+        {/if}
       </p>
     {:else if item.waitingReason}
       <p class="muted">{item.waitingReason}</p>

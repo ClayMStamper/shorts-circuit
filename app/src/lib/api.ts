@@ -219,6 +219,9 @@ export const api = {
   preferences: () => call<Preferences>("preferences"),
   updatePreferences: (update: PreferencesUpdate) => call<Preferences>("update_preferences", { update }),
   checkWatchFolder: () => call<Preferences>("check_watch_folder"),
+  /** Opens a waiting TikTok post and expects its downloaded video. */
+  getOriginal: (assetId: string) => call<void>("get_original", { assetId }),
+  defaultDownloadsFolder: () => call<string | null>("default_downloads_folder"),
   mediaStatus: () => call<MediaStatus>("media_status"),
   openFolder: (path: string) => call<void>("open_folder", { path }),
 };

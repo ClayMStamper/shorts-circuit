@@ -26,6 +26,8 @@ pub struct App {
     worker: OnceLock<Arc<Worker>>,
     /// Problems reaching the cloud runner, per cloud-owned publication (set by the sync).
     cloud_notes: Mutex<HashMap<PublicationId, String>>,
+    /// TikTok posts the owner asked to download ("Get original"), by video id.
+    pub(crate) expected_originals: Mutex<HashMap<String, DateTime<Utc>>>,
 }
 
 impl App {
@@ -48,6 +50,7 @@ impl App {
             events,
             worker: OnceLock::new(),
             cloud_notes: Mutex::new(HashMap::new()),
+            expected_originals: Mutex::new(HashMap::new()),
         }))
     }
 

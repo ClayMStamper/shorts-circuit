@@ -276,6 +276,7 @@ export function installMock(scenario: string): void {
       postingSlots: [],
       watchCollection: "c1",
       watchCheckedAt: source.watchCheckedAt,
+      downloadsFolder: scenario === "empty" ? null : "C:\Users\clay\Downloads",
     }),
     list_collections: () => [],
     tiktok_status: () =>

@@ -55,6 +55,7 @@ function fake(extra: Record<string, (args: Record<string, unknown>) => unknown>)
       postingSlots: [],
       watchCollection: null,
       watchCheckedAt: null,
+      downloadsFolder: null,
     }),
     tiktok_status: () => ({ kind: "off" }),
     tiktok_app_info: () => ({ appConfigured: false, clientKey: null, brokerConfigured: false, redirectUri: "http://127.0.0.1:47616/callback/" }),

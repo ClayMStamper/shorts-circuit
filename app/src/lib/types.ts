@@ -356,6 +356,8 @@ export interface Preferences {
   watchCollection: string | null;
   /** When the watch folder was last listed. */
   watchCheckedAt: string | null;
+  /** Also watched, only for videos downloaded from pending TikTok posts. Null = off. */
+  downloadsFolder: string | null;
 }
 
 export interface PreferencesUpdate {
@@ -365,6 +367,7 @@ export interface PreferencesUpdate {
   exportDir?: string | null;
   postingSlots?: PostingSlot[];
   watchCollection?: string | null;
+  downloadsFolder?: string | null;
 }
 
 export type ScheduleInput =

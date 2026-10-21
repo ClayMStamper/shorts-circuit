@@ -18,6 +18,7 @@ mod app;
 pub mod cloud;
 mod collections;
 pub mod credentials;
+mod downloads;
 mod error;
 mod events;
 pub mod instagram;
