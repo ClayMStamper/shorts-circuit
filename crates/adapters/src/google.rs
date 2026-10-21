@@ -326,8 +326,23 @@ impl Loopback {
     /// Listens on a fixed port, for providers that only accept a pre-registered redirect
     /// address (`http://127.0.0.1:<port><path>`). Requests are matched by `state`, not path.
     /// Port `0` picks a free port.
+    ///
+    /// A sign-in that was just cancelled may still be releasing the port, so a busy port is
+    /// retried for a few seconds before giving up.
     pub async fn bind_port(port: u16, path: &str) -> std::io::Result<Self> {
-        let listener = TcpListener::bind(("127.0.0.1", port)).await?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let listener = loop {
+            match TcpListener::bind(("127.0.0.1", port)).await {
+                Ok(listener) => break listener,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::AddrInUse
+                        && tokio::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        };
         let port = listener.local_addr()?.port();
         let path = if path.starts_with('/') {
             path.to_owned()

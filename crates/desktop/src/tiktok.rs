@@ -208,6 +208,15 @@ struct PendingConnect {
     started: Instant,
     /// Direct sign-ins finish in the background; the result lands here.
     direct: Option<Arc<Mutex<Option<ConnectProgress>>>>,
+    /// Stops a direct sign-in's loopback listener (freeing its port) when this sign-in is
+    /// replaced, finished or abandoned.
+    cancel: CancellationToken,
+}
+
+impl Drop for PendingConnect {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
 }
 
 struct Clients {
@@ -440,10 +449,13 @@ impl TikTokIntake {
                 verifier,
                 started: Instant::now(),
                 direct: None,
+                cancel: CancellationToken::new(),
             });
             self.app.emit(AppEvent::TikTokChanged);
             return Ok(url);
         };
+        // A previous attempt (e.g. with other credentials) may still hold the port; stop it.
+        drop(self.pending.lock().expect("pending lock").take());
         let loopback = Loopback::bind_port(clients.loopback_port, LOOPBACK_PATH)
             .await
             .map_err(|e| {
@@ -458,33 +470,38 @@ impl TikTokIntake {
             .oauth
             .authorization_url(&tiktok_app, &redirect, &state, &verifier);
         let result = Arc::new(Mutex::new(None));
+        let cancel = CancellationToken::new();
         *self.pending.lock().expect("pending lock") = Some(PendingConnect {
             state: state.clone(),
             verifier: verifier.clone(),
             started: Instant::now(),
             direct: Some(result.clone()),
+            cancel: cancel.clone(),
         });
         self.app.emit(AppEvent::TikTokChanged);
         let this = self.clone();
         tokio::spawn(async move {
-            let progress =
-                match tokio::time::timeout(CONNECT_TIMEOUT, loopback.wait_for_code(&state)).await {
-                    Err(_) => ConnectProgress::Failed {
-                        message: "The TikTok sign-in timed out; start again.".into(),
-                    },
-                    Ok(Err(e)) => ConnectProgress::Failed {
+            let waited = tokio::select! {
+                () = cancel.cancelled() => return,
+                r = tokio::time::timeout(CONNECT_TIMEOUT, loopback.wait_for_code(&state)) => r,
+            };
+            let progress = match waited {
+                Err(_) => ConnectProgress::Failed {
+                    message: "The TikTok sign-in timed out; start again.".into(),
+                },
+                Ok(Err(e)) => ConnectProgress::Failed {
+                    message: e.to_string(),
+                },
+                Ok(Ok(code)) => match this
+                    .direct_exchange(&tiktok_app, &code, &redirect, &verifier)
+                    .await
+                {
+                    Ok(status) => ConnectProgress::Connected { status },
+                    Err(e) => ConnectProgress::Failed {
                         message: e.to_string(),
                     },
-                    Ok(Ok(code)) => match this
-                        .direct_exchange(&tiktok_app, &code, &redirect, &verifier)
-                        .await
-                    {
-                        Ok(status) => ConnectProgress::Connected { status },
-                        Err(e) => ConnectProgress::Failed {
-                            message: e.to_string(),
-                        },
-                    },
-                };
+                },
+            };
             *result.lock().expect("result lock") = Some(progress);
             this.app.emit(AppEvent::TikTokChanged);
         });

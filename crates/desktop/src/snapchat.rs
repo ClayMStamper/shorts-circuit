@@ -585,6 +585,10 @@ impl SnapchatConnector {
             }
             ReturnMode::Loopback => {
                 let port = redirect.port().expect("loopback addresses have a port");
+                // A previous attempt may still hold the port; stop it before listening again.
+                if let Some(previous) = self.pending.lock().expect("pending lock").take() {
+                    previous.cancel.cancel();
+                }
                 let loopback = Loopback::bind_port(port, redirect.path())
                     .await
                     .map_err(|e| {

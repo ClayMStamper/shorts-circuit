@@ -305,6 +305,8 @@ async fn the_owners_own_app_signs_in_directly_without_a_broker() {
     );
     intake.set_enabled(true).await.unwrap();
 
+    // A second Connect (e.g. after pasting a new key) takes the port over from the first.
+    intake.begin_connect().await.unwrap();
     let url = intake.begin_connect().await.unwrap();
     assert_eq!(url.path(), "/v2/auth/authorize/");
     let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
