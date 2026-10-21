@@ -158,6 +158,8 @@ Repurpose.io's Workflows page.
   Library, Collections, Review and Monitor stay reachable under Settings → Advanced. A first-run
   wizard (source → destinations → suggested workflows) shows until a workflow exists and can be
   reopened from Workflows.
+- **Turning Auto Publish on** for a workflow also approves the items it is holding for review
+  (the revisions it created), since that is what the owner just asked for.
 - **Small rules.** A YouTube upload that stays private shows "Uploaded (private)" with a hint to
   make it public in YouTube Studio instead of "Published". Each connection problem shows a single
   next action.
@@ -168,18 +170,44 @@ Originals come in through the watch folder, typically a folder the phone or edit
 TikTok is used at most to notice that a post exists:
 
 - **New-post detection** (optional, off by default, behind a setting). A poller in the desktop
-  app calls the Display API with a token obtained through the OAuth broker, which holds the
-  TikTok client secret and does code exchange, refresh and revoke. The desktop starts sign-in
-  at `<broker>/v1/tiktok/connect?state&challenge` and collects tokens from `/v1/tiktok/claim`
-  with the verifier behind the challenge. Tokens are kept in the OS credential store.
+  app calls the Display API. Tokens come from one of two sign-ins, both kept in the OS
+  credential store:
+  - **Direct** (default since 21 October 2026, `shorts_adapters::tiktok_oauth`). Researched in
+    TikTok's "Login Kit for Desktop" and "Manage user access tokens" pages (21 October 2026):
+    desktop apps register a redirect on `localhost`/`127.0.0.1` with an explicit (or `*`) port
+    and must use PKCE (`code_challenge_method=S256`), but the token endpoint
+    (`open.tiktokapis.com/v2/oauth/token/`) still takes `client_secret` alongside the
+    `code_verifier`. So there is no secret-free public-client flow; instead the owner pastes
+    their own TikTok app's client key and secret (OS credential store, `tiktok_app`), exactly
+    like the Snap OAuth app, and the desktop listens on `http://127.0.0.1:47616/callback/`,
+    exchanges the code and refreshes tokens itself. No broker or paste page is needed.
+    *Assumption to confirm:* TikTok's desktop page describes the challenge as the hex SHA-256
+    of the verifier (not RFC 7636's base64url); hex is the default and
+    `SHORTS_TIKTOK_PKCE=base64url` switches. A fixed port is used rather than `*` in case
+    wildcard ports aren't honoured.
+  - **Broker** (fallback when `SHORTS_BROKER_URL` is set and no app is pasted). The OAuth
+    broker holds the client secret and does code exchange, refresh and revoke; the desktop
+    starts sign-in at `<broker>/v1/tiktok/connect?state&challenge` and collects tokens from
+    `/v1/tiktok/claim` with the verifier behind the challenge. Sign-ins made through it keep
+    refreshing through it.
 - Each new post becomes an asset awaiting media with title, caption, share URL, post time,
   duration and a cached copy of the cover image (`tiktok_posts`). Nothing else is downloaded.
 - When a file is imported, files whose duration is within 1.5 s of a pending post and that
-  arrived within 72 hours of it are suggested as its original. Only the user's confirmation
-  merges them: the file's asset takes the post's details and collections (so rules fire) and
-  the placeholder is removed. Dismissed pairs aren't suggested again.
-- Without a configured TikTok developer app the feature reports itself unavailable with the
-  next step (see `docs/human-scope.md`).
+  arrived within 72 hours of it are suggested as its original. Confirming merges them: the
+  file's asset takes the post's details (its caption wins over a sidecar) and collections (so
+  rules fire) and the placeholder is removed. Dismissed pairs aren't suggested again. Once a
+  workflow exists, unambiguous pairs (the post's only candidate, which is no other post's
+  candidate) are confirmed automatically after each import and TikTok check; ambiguous ones
+  still wait for the user.
+- **Caption source for workflows.** The matched TikTok post's caption and hashtags; else a
+  sidecar next to the file (`<name>.json` with `caption`/`description`/`text`/`title` and
+  `hashtags`/`tags`, or `<name>.txt`), stored as the asset's notes; else a title from the file
+  name. While TikTok detection is connected, a workflow holds a new file that has no caption of
+  its own for up to two hours (`CAPTION_WAIT_MINUTES`) so its post can be matched first; each
+  watch-folder rescan and TikTok check re-runs rules for recent items, so it goes out once the
+  wait ends either way.
+- Without a TikTok developer app (pasted, or on a configured broker) the feature reports itself
+  unavailable with the next step (see `docs/human-scope.md`).
 - The watch folder and the TikTok poller both show when they last checked and offer "Check
   now". The watch folder also relists itself every 10 minutes, since sync clients don't always
   raise file events.
