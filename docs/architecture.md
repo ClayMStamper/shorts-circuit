@@ -104,6 +104,64 @@ As implemented (Increment 2):
 Approval binds to an **immutable publication revision**. Any change to approved media, copy, or
 destination invalidates that approval and returns the publication to review.
 
+### Workflows UX (owner decision, 21 October 2026)
+
+After the first real upload the owner found the collection/rule/review flow had too many manual
+steps (render, permissions, approving each post, re-typing captions) spread over too many
+screens. **Decision: content flows automatically by default.** Connect accounts once, set up the
+source, and every new video is published to every connected destination with its source
+caption and hashtags. Reviewing and customizing are optional advanced settings. The reference is
+Repurpose.io's Workflows page.
+
+- **A workflow is "source → one destination account"**, e.g. "TikTok → YouTube Shorts". The
+  source is the owner's own videos: the watch folder, plus TikTok new-post detection for
+  captions when connected. A workflow is a thin record (`workflows`, migration 0007) over the
+  existing model, not a replacement: one `CollectionRule` with a single destination in the
+  *source collection* (the collection the watch folder routes into; setup creates "Source
+  videos" when there is none). At most one workflow per source collection and account.
+  - *Auto Publish* on = an `UnattendedGrant` for that collection and account. Off = no grant,
+    so publications wait at `AwaitingApproval` ("require review" in the settings drawer is the
+    same switch, worded from the other side). This restores the earlier behaviour exactly.
+  - *Active / Inactive* = the rule's `enabled`. Reactivating restarts it from now
+    (`effective_from`), so pausing never floods destinations with what arrived meanwhile.
+  - *Needs reconnect* = the account's capability record asks for a reconnect, or a publication
+    for it waits at `NeedsAuthentication`. The fix is one click (Reconnect).
+  - The workflow keeps its *settings*: posting (`as soon as possible`, the default, or the
+    posting slots), caption template (default `{caption}`), extra hashtags, destination options
+    (Instagram share to feed; YouTube public/private is the channel's setting) and the
+    effective-from date (the rule's).
+- **Rights.** Creating a workflow asks once: "I own or have the rights to content from this
+  source". The confirmation is stored on the workflow; when the workflow's rule fires for an
+  item whose video or audio permission is still *unknown*, both are recorded as granted with the
+  note "Rights confirmed in workflow <name>". A recorded *denied* is never overwritten, so such
+  an item still waits for review.
+- **Zero-touch pipeline.** When a workflow's rule fires: the default variant is rendered (for
+  every rule-created publication, not only unattended ones, so review is instant too); copy
+  comes from the source (TikTok post caption when matched, else a sidecar `.txt`/`.json` next
+  to the file, else a title from the file name); each destination's copy is fitted to its limits
+  (`shorts_domain::copy::fit`: YouTube refuses `<`/`>` and uses the first line as title, Snapchat
+  is cut to 160 characters, Instagram keeps ≤ 30 hashtags, LinkedIn escaping stays in the
+  adapter) by dropping trailing hashtags first, then shortening the text with "…"; the posting
+  time is now (or the next free slot; no free slot falls back to now). Under Auto Publish the
+  workflow approves the publication's current revision once it is rendered and the review shows
+  no issues, recorded as approved by `workflow:<name>`; an "as soon as possible" time that
+  passed while rendering is moved to now first, so the overdue policy doesn't expire it.
+  Anything the review flags (too long for Spotlight, a denied permission) waits with the reason
+  and an Approve / Skip choice.
+- **The invariant still holds.** Every approval, by the owner or a workflow, binds to one
+  immutable revision; editing media, copy or destination makes a new revision and drops it. With
+  Auto Publish on, the workflow approves the new revision again only if it created the
+  publication and hasn't approved it before (`rule_firings.auto_approved_at`), so an edit made by
+  hand goes back to the owner.
+- **Navigation.** Workflows (home), Activity (every item, newest first, with each destination's
+  status), Connections (one card per platform plus the source), Settings (rarely used options).
+  Library, Collections, Review and Monitor stay reachable under Settings → Advanced. A first-run
+  wizard (source → destinations → suggested workflows) shows until a workflow exists and can be
+  reopened from Workflows.
+- **Small rules.** A YouTube upload that stays private shows "Uploaded (private)" with a hint to
+  make it public in YouTube Studio instead of "Published". Each connection problem shows a single
+  next action.
+
 ### Automatic intake
 
 Originals come in through the watch folder, typically a folder the phone or editor syncs to.
