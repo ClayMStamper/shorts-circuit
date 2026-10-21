@@ -325,8 +325,10 @@ impl Loopback {
 
     /// Listens on a fixed port, for providers that only accept a pre-registered redirect
     /// address (`http://127.0.0.1:<port><path>`). Requests are matched by `state`, not path.
+    /// Port `0` picks a free port.
     pub async fn bind_port(port: u16, path: &str) -> std::io::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", port)).await?;
+        let port = listener.local_addr()?.port();
         let path = if path.starts_with('/') {
             path.to_owned()
         } else {
