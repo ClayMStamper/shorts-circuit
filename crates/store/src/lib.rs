@@ -16,6 +16,7 @@ mod quota;
 mod settings;
 mod tiktok;
 mod variants;
+mod workflows;
 
 use std::path::Path;
 use std::str::FromStr;
@@ -37,6 +38,7 @@ pub use quota::Quota;
 pub use settings::Settings;
 pub use tiktok::TikTokPosts;
 pub use variants::Variants;
+pub use workflows::Workflows;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
@@ -96,6 +98,8 @@ pub enum StoreError {
     DuplicateMedia { checksum: String },
     #[error("the name {name:?} is already taken")]
     DuplicateName { name: String },
+    #[error("there is already a workflow from this source to that account")]
+    DuplicateWorkflow { collection: String, account: String },
     #[error("an open {kind} job already exists for {subject}")]
     DuplicateOpenJob { kind: String, subject: String },
     /// A job transition was refused, e.g. the caller no longer holds the lease.
@@ -216,6 +220,10 @@ impl Store {
 
     pub fn quota(&self) -> Quota<'_> {
         Quota::new(&self.pool)
+    }
+
+    pub fn workflows(&self) -> Workflows<'_> {
+        Workflows::new(&self.pool)
     }
 
     pub fn settings(&self) -> Settings<'_> {

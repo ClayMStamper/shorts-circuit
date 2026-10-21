@@ -11,7 +11,7 @@ use shorts_domain::{
     MediaFileId, MediaProperties, OverduePolicy, PermissionStatus, Platform, Publication,
     PublicationEvent, PublicationState, PublishAttempt, Rating, RenderRecipe, RevisionContent,
     RuleFiring, RuleId, RuleOutput, RuleSpec, Schedule, Tag, TikTokPost, TimeZoneName,
-    TransitionError, UnattendedGrant, Variant,
+    TransitionError, UnattendedGrant, Variant, Workflow, WorkflowSettings,
 };
 use shorts_store::{AssetFilter, JobFilter, PublicationFilter, Store, StoreError};
 use tempfile::TempDir;
@@ -1300,4 +1300,97 @@ async fn claiming_and_handing_over_never_both_win() {
         }
     }
     assert_eq!(claims + handovers, 30);
+}
+
+#[tokio::test]
+async fn workflows_wrap_a_rule_and_grant_and_go_with_them() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 41).await;
+    let c = Collection::new("Source videos", t0()).unwrap();
+    store.collections().insert(&c).await.unwrap();
+    let spec = RuleSpec {
+        name: "TikTok → Instagram Reels".into(),
+        enabled: true,
+        destinations: vec![f.account.id],
+        output: RuleOutput::AwaitingApproval,
+        caption_template: String::new(),
+        hashtags: vec![],
+        include_asset_tags: false,
+    };
+    let rule = CollectionRule::new(c.id, spec.clone(), None, t0()).unwrap();
+    let workflow = Workflow::new(
+        rule.id,
+        c.id,
+        f.account.id,
+        WorkflowSettings::default(),
+        true,
+        t0(),
+    );
+    let grant = UnattendedGrant {
+        collection_id: c.id,
+        account_id: f.account.id,
+        enabled_at: t0(),
+        enabled_by: "owner".into(),
+    };
+    store
+        .workflows()
+        .create(&rule, &workflow, Some(&grant))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.workflows().list().await.unwrap(),
+        vec![workflow.clone()]
+    );
+    assert_eq!(
+        store.workflows().for_rule(rule.id).await.unwrap(),
+        Some(workflow.clone())
+    );
+    assert_eq!(
+        store.collections().rules(c.id).await.unwrap(),
+        vec![rule.clone()]
+    );
+    assert!(
+        store
+            .collections()
+            .grant(c.id, f.account.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // One workflow per collection and account; the failed attempt writes nothing.
+    let second = CollectionRule::new(c.id, spec, None, t0()).unwrap();
+    let dup = Workflow::new(
+        second.id,
+        c.id,
+        f.account.id,
+        WorkflowSettings::default(),
+        false,
+        t0(),
+    );
+    assert!(matches!(
+        store.workflows().create(&second, &dup, None).await,
+        Err(StoreError::DuplicateWorkflow { .. })
+    ));
+    assert_eq!(store.collections().rules(c.id).await.unwrap().len(), 1);
+
+    let mut edited = workflow.clone();
+    edited.confirm_rights(false, t0() + Duration::minutes(1));
+    store.workflows().update(&edited).await.unwrap();
+    assert_eq!(
+        store.workflows().require(workflow.id).await.unwrap(),
+        edited
+    );
+
+    store.workflows().delete(workflow.id).await.unwrap();
+    assert!(store.workflows().get(workflow.id).await.unwrap().is_none());
+    assert!(store.collections().rule(rule.id).await.unwrap().is_none());
+    assert!(
+        store
+            .collections()
+            .grant(c.id, f.account.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
