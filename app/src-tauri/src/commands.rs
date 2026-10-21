@@ -8,19 +8,20 @@ use shorts_adapters::linkedin::Organization;
 use shorts_desktop::instagram::InstagramStatus;
 use shorts_desktop::linkedin::LinkedInStatus;
 use shorts_desktop::snapchat::{SnapConnectProgress, SnapStatus};
-use shorts_desktop::tiktok::{CheckReport, ConnectProgress, TikTokStatus};
+use shorts_desktop::tiktok::{CheckReport, ConnectProgress, TikTokAppInfo, TikTokStatus};
 use shorts_desktop::views::{
-    AccountView, AssetDetail, AssetSummary, CollectionView, MatchSuggestion, MonitorView,
-    PublicationView, ReviewView, RuleActivityView, TagCount, VariantView,
+    AccountView, ActivityView, AssetDetail, AssetSummary, CollectionView, MatchSuggestion,
+    MonitorView, PublicationView, ReviewView, RuleActivityView, TagCount, VariantView,
+    WorkflowDetailView, WorkflowView, WorkflowsView,
 };
 use shorts_desktop::youtube::{YouTubeConnectProgress, YouTubeStatus};
 use shorts_desktop::{
     AppError, AssetUpdate, EditPublication, ImportOutcome, LibraryQuery, NewPublication,
-    Preferences, PreferencesUpdate, RuleInput, ScheduleInput,
+    NewWorkflow, Preferences, PreferencesUpdate, RuleInput, ScheduleInput, WorkflowUpdate,
 };
 use shorts_domain::{
     AccountId, AssetId, CollectionId, JobId, OutcomeResolution, Platform, PublicationId,
-    RenderRecipe, RuleId, VariantId,
+    RenderRecipe, RuleId, VariantId, WorkflowId,
 };
 use tauri::State;
 
@@ -387,6 +388,96 @@ pub async fn set_unattended(
 }
 
 #[tauri::command]
+pub async fn list_workflows(shell: State<'_, Shell>) -> Result<WorkflowsView> {
+    shell.app.list_workflows().await
+}
+
+#[tauri::command]
+pub async fn workflow_detail(
+    shell: State<'_, Shell>,
+    id: WorkflowId,
+) -> Result<WorkflowDetailView> {
+    shell.app.workflow_detail(id).await
+}
+
+#[tauri::command]
+pub async fn create_workflow(
+    shell: State<'_, Shell>,
+    workflow: NewWorkflow,
+) -> Result<WorkflowView> {
+    shell.app.create_workflow(workflow).await
+}
+
+#[tauri::command]
+pub async fn update_workflow(
+    shell: State<'_, Shell>,
+    id: WorkflowId,
+    update: WorkflowUpdate,
+) -> Result<WorkflowView> {
+    shell.app.update_workflow(id, update).await
+}
+
+#[tauri::command]
+pub async fn delete_workflow(shell: State<'_, Shell>, id: WorkflowId) -> Result<()> {
+    shell.app.delete_workflow(id).await
+}
+
+#[tauri::command]
+pub async fn activity(shell: State<'_, Shell>, limit: Option<u32>) -> Result<ActivityView> {
+    shell.app.activity(limit.unwrap_or(200)).await
+}
+
+#[tauri::command]
+pub async fn publish_now(shell: State<'_, Shell>, id: PublicationId) -> Result<PublicationView> {
+    shell.app.publish_now(id).await
+}
+
+#[tauri::command]
+pub async fn republish(shell: State<'_, Shell>, id: PublicationId) -> Result<PublicationView> {
+    shell.app.republish(id).await
+}
+
+/// "Check for new content now": lists the watch folder and asks TikTok for new posts (when
+/// connected), then returns the Workflows page. A source that isn't set up is skipped.
+#[tauri::command]
+pub async fn check_for_new_content(shell: State<'_, Shell>) -> Result<WorkflowsView> {
+    let watch = shell
+        .watch
+        .lock()
+        .expect("watch lock")
+        .as_ref()
+        .map(|w| w.check_now());
+    if let Some(check) = watch {
+        check.await?;
+    }
+    if matches!(shell.tiktok.status().await?, TikTokStatus::Connected { .. }) {
+        shell.tiktok.check_now().await?;
+    }
+    shell.app.apply_deferred_rules().await;
+    shell.app.list_workflows().await
+}
+
+#[tauri::command]
+pub async fn tiktok_app_info(shell: State<'_, Shell>) -> Result<TikTokAppInfo> {
+    shell.tiktok.app_info()
+}
+
+/// Saves the owner's TikTok app in the OS credential store. The secret is never sent back.
+#[tauri::command]
+pub async fn tiktok_set_app(
+    shell: State<'_, Shell>,
+    client_key: String,
+    client_secret: String,
+) -> Result<TikTokStatus> {
+    shell.tiktok.set_app(&client_key, &client_secret).await
+}
+
+#[tauri::command]
+pub async fn tiktok_clear_app(shell: State<'_, Shell>) -> Result<TikTokStatus> {
+    shell.tiktok.clear_app().await
+}
+
+#[tauri::command]
 pub async fn tiktok_status(shell: State<'_, Shell>) -> Result<TikTokStatus> {
     shell.tiktok.status().await
 }
@@ -396,13 +487,13 @@ pub async fn tiktok_set_enabled(shell: State<'_, Shell>, enabled: bool) -> Resul
     shell.tiktok.set_enabled(enabled).await
 }
 
-/// Opens the broker's sign-in page in the default browser. The UI then calls
+/// Opens TikTok's (or the broker's) sign-in page in the default browser. The UI then calls
 /// `tiktok_finish_connect` until it stops reporting `pending`.
 #[tauri::command]
 pub async fn tiktok_connect(shell: State<'_, Shell>) -> Result<()> {
     let url = shell.tiktok.begin_connect().await?;
     if !matches!(url.scheme(), "https" | "http") {
-        return Err(AppError::Invalid("the broker URL must be http(s)".into()));
+        return Err(AppError::Invalid("the sign-in URL must be http(s)".into()));
     }
     open_external(url.as_str())?;
     Ok(())

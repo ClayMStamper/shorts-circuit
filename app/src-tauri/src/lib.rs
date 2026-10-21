@@ -152,7 +152,7 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
         .await?;
     let tiktok = TikTokIntake::new(
         app.clone(),
-        TikTokSetup::from_env(),
+        Some(TikTokSetup::from_env()),
         Arc::new(keyring_store::KeyringCredentials),
     );
     tauri::async_runtime::spawn(tiktok.clone().run(shutdown.clone()));
@@ -254,6 +254,18 @@ pub fn run() {
             commands::set_unattended,
             commands::rule_activity,
             commands::check_watch_folder,
+            commands::list_workflows,
+            commands::workflow_detail,
+            commands::create_workflow,
+            commands::update_workflow,
+            commands::delete_workflow,
+            commands::activity,
+            commands::publish_now,
+            commands::republish,
+            commands::check_for_new_content,
+            commands::tiktok_app_info,
+            commands::tiktok_set_app,
+            commands::tiktok_clear_app,
             commands::tiktok_status,
             commands::tiktok_set_enabled,
             commands::tiktok_connect,
