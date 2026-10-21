@@ -8,6 +8,7 @@ pub mod account;
 pub mod asset;
 pub mod attempt;
 pub mod collection;
+pub mod copy;
 pub mod ids;
 pub mod instagram;
 pub mod job;
@@ -21,6 +22,7 @@ pub mod schedule;
 pub mod snapchat;
 pub mod source;
 pub mod variant;
+pub mod workflow;
 pub mod youtube;
 
 pub use account::{Capabilities, ConnectedAccount, MissingCapability, NextAction, PublishAccess};
@@ -32,16 +34,16 @@ pub use collection::{
 };
 pub use ids::{
     AccountId, AssetId, AttemptId, CollectionId, HandoverId, JobId, MediaFileId, PublicationId,
-    RuleId, VariantId,
+    RuleId, VariantId, WorkflowId,
 };
 pub use job::{Job, JobKind, JobRecord, JobState, Lease, OverduePolicy, PauseReason};
 pub use media::{Checksum, MediaFile, MediaProperties};
 pub use ownership::{Execution, ExecutionOwner, InFlight, OwnerReport};
 pub use platform::{MediaRequirements, Platform, ValidationIssue};
 pub use publication::{
-    ActiveStage, Approval, Destination, OutcomeResolution, Publication, PublicationEvent,
-    PublicationRecord, PublicationRevision, PublicationState, PublishedRef, RevisionContent,
-    Transition, TransitionError, UserAction,
+    ActiveStage, Approval, Destination, DestinationOptions, OutcomeResolution, Publication,
+    PublicationEvent, PublicationRecord, PublicationRevision, PublicationState, PublishedRef,
+    RevisionContent, Transition, TransitionError, UserAction,
 };
 pub use recipe::{
     AudioChoice, CropRect, EncodingSettings, FitMode, RECIPE_SCHEMA_VERSION, RecipeIssue,
@@ -50,3 +52,4 @@ pub use recipe::{
 pub use schedule::{Schedule, TimeZoneName};
 pub use source::{MatchScore, TikTokPost, match_score, post_title};
 pub use variant::{RenderedOutput, Variant};
+pub use workflow::{PostingMode, Workflow, WorkflowError, WorkflowSettings, WorkflowStatus};
