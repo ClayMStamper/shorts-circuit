@@ -491,6 +491,28 @@ async fn workflows_can_be_paused_reactivated_and_removed() {
 
     s.h.app.delete_workflow(id).await.unwrap();
     assert!(s.h.app.list_workflows().await.unwrap().workflows.is_empty());
+
+    // Deleting a workflow's rule from Collections removes the workflow and its grant too.
+    let w =
+        s.h.app
+            .create_workflow(new_workflow(s.account, true))
+            .await
+            .unwrap();
+    let c = s.h.app.source_collection().await.unwrap();
+    s.h.app
+        .delete_rule(w.rule_id.parse().unwrap())
+        .await
+        .unwrap();
+    assert!(s.h.app.list_workflows().await.unwrap().workflows.is_empty());
+    assert!(
+        s.h.app
+            .store()
+            .collections()
+            .grant(c, s.account)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]

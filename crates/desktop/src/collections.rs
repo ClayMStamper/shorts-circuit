@@ -185,6 +185,12 @@ impl App {
 
     pub async fn delete_rule(&self, id: RuleId) -> AppResult<CollectionView> {
         let rule = self.store.collections().require_rule(id).await?;
+        // A workflow's rule takes the workflow (and its Auto Publish grant) with it.
+        if let Some(w) = self.workflow_for_rule(id).await? {
+            self.store.workflows().delete(w.id).await?;
+            self.emit(AppEvent::CollectionsChanged);
+            return self.collection(rule.collection_id).await;
+        }
         self.store.collections().delete_rule(id).await?;
         self.emit(AppEvent::CollectionsChanged);
         self.collection(rule.collection_id).await
