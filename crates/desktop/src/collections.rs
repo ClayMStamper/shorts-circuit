@@ -597,6 +597,11 @@ impl App {
                 views.push(self.publication_view(&p).await?);
             }
         }
+        let source_url = post
+            .as_ref()
+            .and_then(|p| p.share_url.clone())
+            .or_else(|| asset.as_ref().and_then(|a| a.source_url.clone()))
+            .filter(|u| u.starts_with("https://"));
         Ok(RuleItemView {
             asset_id: asset_id.to_string(),
             added_at: asset.as_ref().map_or_else(|| self.now(), |a| a.created_at),
@@ -605,6 +610,7 @@ impl App {
             caption: asset.map(|a| a.notes).unwrap_or_default(),
             duration_ms,
             source_posted_at: post.map(|p| p.posted_at),
+            source_url,
             waiting_for_media,
             publications: views,
         })

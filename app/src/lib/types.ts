@@ -484,6 +484,8 @@ export interface RuleItemView {
   caption: string;
   durationMs: number | null;
   sourcePostedAt: string | null;
+  /** The original post (e.g. its TikTok link), when known. */
+  sourceUrl: string | null;
   /** In the collection, but the original file hasn't arrived yet. */
   waitingForMedia: boolean;
   /** Why nothing has been created yet, e.g. waiting for its TikTok caption. */

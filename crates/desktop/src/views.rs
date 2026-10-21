@@ -328,6 +328,8 @@ pub struct RuleItemView {
     pub caption: String,
     pub duration_ms: Option<u64>,
     pub source_posted_at: Option<DateTime<Utc>>,
+    /// The original post (e.g. its TikTok link), when known; https only.
+    pub source_url: Option<String>,
     /// In the collection, but its original file hasn't arrived yet.
     pub waiting_for_media: bool,
     /// Why nothing has been created for it yet, e.g. waiting for its TikTok caption.

@@ -72,6 +72,7 @@
   }
 
   const caption = $derived(item.caption.trim() || item.title);
+  const sourceLabel = $derived(item.sourceUrl?.includes("tiktok.com") ? "Open on TikTok" : "Open original");
   const when = $derived(
     item.sourcePostedAt ? `Posted on TikTok ${formatDate(item.sourcePostedAt)}` : `Added ${formatDate(item.addedAt)}`,
   );
@@ -84,7 +85,12 @@
   </div>
   <div class="body">
     <p class="caption-text">{caption}</p>
-    <span class="when">{when}</span>
+    <span class="when">
+      {when}
+      {#if item.sourceUrl}
+        · <button class="link" data-testid="source-link" onclick={() => api.openLink(item.sourceUrl!)}>{sourceLabel} ↗</button>
+      {/if}
+    </span>
     {#if item.waitingForMedia}
       <p class="callout" style="padding: 6px 10px">
         Waiting for the original file: save it to your watch folder. TikTok doesn't let apps download your videos.
@@ -100,7 +106,7 @@
           {#if p.state === "published"}
             <span class="hint">
               {#if p.publishedUrl}
-                <button class="link" onclick={() => api.openLink(p.publishedUrl!)}>Open on {p.platformName}</button> ·
+                <button class="link" data-testid="published-link" onclick={() => api.openLink(p.publishedUrl!)}>Open on {p.platformName} ↗</button> ·
               {/if}
               {timeAgo(p.updatedAt)}
             </span>
