@@ -309,6 +309,23 @@ async fn a_container_without_an_upload_address_uses_the_default_host() {
 }
 
 #[tokio::test]
+async fn a_workflow_can_keep_reels_off_the_main_feed() {
+    let mut f = Fixture::new().await;
+    let mut content = f.publication.content().clone();
+    content.options.share_to_feed = Some(false);
+    f.publication = Publication::draft(AssetId::new(), content, None, t0());
+    Mock::given(method("POST"))
+        .and(path(format!("/v24.0/{USER}/media")))
+        .and(body_string_contains("share_to_feed=false"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "c8" })))
+        .mount(&f.server)
+        .await;
+    let a = f.adapter(Tokens::new(&["IGAA-one"]));
+    let cp = a.begin_upload(&f.submission()).await.unwrap();
+    assert_eq!(cp.container_id, "c8");
+}
+
+#[tokio::test]
 async fn a_broken_upload_is_sent_again_to_the_same_container() {
     let f = Fixture::new().await;
     f.mock_container().await;

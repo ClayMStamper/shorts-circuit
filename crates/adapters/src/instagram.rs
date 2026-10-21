@@ -521,6 +521,11 @@ impl InstagramAdapter {
         }
         let content = s.publication.content();
         let caption = full_caption(&content.caption, &content.hashtags);
+        let share_to_feed = if content.options.share_to_feed.unwrap_or(true) {
+            "true"
+        } else {
+            "false"
+        };
         let created: Created = self
             .call(s.account.id, |session| {
                 self.http
@@ -530,7 +535,7 @@ impl InstagramAdapter {
                         ("media_type", "REELS"),
                         ("upload_type", "resumable"),
                         ("caption", caption.as_str()),
-                        ("share_to_feed", "true"),
+                        ("share_to_feed", share_to_feed),
                     ])
             })
             .await?;
