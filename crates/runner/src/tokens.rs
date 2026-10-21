@@ -1,22 +1,24 @@
 //! Adapter sessions from the encrypted credentials, refreshed the way the desktop connectors
 //! refresh them: Google and Snap access tokens from refresh tokens (keeping rotated refresh
-//! tokens), Instagram renewal when under 20 days are left, LinkedIn tokens until they expire.
+//! tokens), Instagram Page tokens as they are (they don't expire), LinkedIn tokens until they
+//! expire.
 //! Access tokens stay in memory. A refused refresh is an [`AdapterError::Authentication`], which
 //! pauses the publication until the desktop sends a new credential.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
 use shorts_adapters::AdapterError;
 use shorts_adapters::google::{ClientConfig, OAuthClient, OAuthError};
-use shorts_adapters::instagram::{IgSession, InstagramAdapter, InstagramAuth};
+use shorts_adapters::instagram::{IgSession, InstagramAuth};
 use shorts_adapters::linkedin::{LiSession, LinkedInAuth};
 use shorts_adapters::snapchat::{SnapAuth, SnapAuthError, SnapClient, SnapOAuth, SnapSession};
 use shorts_adapters::youtube::AccessTokens;
 use shorts_cloud::{CloudCredential, Secret};
-use shorts_domain::{AccountId, instagram};
+use shorts_domain::AccountId;
+use shorts_domain::instagram::InstagramLogin;
 use shorts_scheduler::Clock;
 use tracing::{info, warn};
 
@@ -24,8 +26,6 @@ use crate::db::{PgStore, StoredCredential};
 
 /// Refresh an access token when it has less than this left.
 const REFRESH_MARGIN: Duration = Duration::seconds(120);
-/// Renew an Instagram token once it has less than this left.
-const RENEW_WITHIN: Duration = Duration::days(20);
 
 #[derive(Clone)]
 struct Cached {
@@ -41,7 +41,6 @@ pub struct RunnerTokens {
     clock: Arc<dyn Clock>,
     google: OAuthClient,
     snap: SnapOAuth,
-    instagram: OnceLock<Arc<InstagramAdapter>>,
     cache: Mutex<HashMap<AccountId, Cached>>,
     refresh: tokio::sync::Mutex<()>,
 }
@@ -71,15 +70,9 @@ impl RunnerTokens {
             clock,
             google,
             snap,
-            instagram: OnceLock::new(),
             cache: Mutex::new(HashMap::new()),
             refresh: tokio::sync::Mutex::new(()),
         })
-    }
-
-    /// The Instagram adapter renews tokens; it needs this source, so it is set afterwards.
-    pub fn set_instagram(&self, adapter: Arc<InstagramAdapter>) {
-        let _ = self.instagram.set(adapter);
     }
 
     /// Drops cached access tokens, e.g. after the desktop sent a new credential.
@@ -148,73 +141,34 @@ impl RunnerTokens {
         }
     }
 
-    /// Instagram: renews the token when it is due (less than 20 days left, at least a day
-    /// old). A failed renewal leaves the current token in use while it lasts.
+    /// Instagram: the Page token as stored. An Instagram Login credential can't upload, so
+    /// it asks for a reconnect with Facebook login.
     async fn instagram_session(&self, account: AccountId) -> Result<IgSession, AdapterError> {
         let stored = self.stored(account).await?;
         let CloudCredential::InstagramReels {
             access_token,
             user_id,
-            issued_at,
+            login,
             expires_at,
         } = stored.credential
         else {
             return Err(reconnect("the stored credential is not an Instagram token"));
         };
-        let now = self.clock.now();
-        if expires_at <= now {
+        if login != InstagramLogin::FacebookLogin {
             return Err(reconnect(
-                "the Instagram token ran out; generate a new one in the Meta app dashboard and \
-                 reconnect on the desktop",
+                "the Instagram account is connected with Instagram login, which can't upload \
+                 files; reconnect it with Facebook login on the desktop",
             ));
         }
-        let due = expires_at - now < RENEW_WITHIN
-            && now - issued_at >= Duration::hours(instagram::TOKEN_MIN_AGE_HOURS);
-        let session = IgSession {
+        if expires_at.is_some_and(|t| t <= self.clock.now()) {
+            return Err(reconnect(
+                "the Instagram token ran out; reconnect the account on the desktop",
+            ));
+        }
+        Ok(IgSession {
             access_token: access_token.expose().to_owned(),
-            user_id: user_id.clone(),
-        };
-        let Some(adapter) = self.instagram.get().filter(|_| due) else {
-            return Ok(session);
-        };
-        let _guard = self.refresh.lock().await;
-        match adapter.refresh_token(access_token.expose()).await {
-            Ok(renewed) => {
-                let lifetime = if renewed.expires_in > 0 {
-                    Duration::seconds(renewed.expires_in)
-                } else {
-                    Duration::days(instagram::TOKEN_LIFETIME_DAYS)
-                };
-                let credential = CloudCredential::InstagramReels {
-                    access_token: Secret::new(renewed.access_token.clone()),
-                    user_id: user_id.clone(),
-                    issued_at: now,
-                    expires_at: now + lifetime,
-                };
-                self.keep(account, stored.revision, &credential).await;
-                Ok(IgSession {
-                    access_token: renewed.access_token,
-                    user_id,
-                })
-            }
-            Err(AdapterError::Authentication { message }) => Err(reconnect(format!(
-                "Instagram would not renew the sign-in ({message}); generate a new token and \
-                 reconnect on the desktop"
-            ))),
-            Err(e) => {
-                warn!(error = %e, "could not renew an Instagram token; using the current one");
-                Ok(session)
-            }
-        }
-    }
-
-    /// Renews every due Instagram token (the runner calls this every 6 hours).
-    pub async fn renew_instagram(&self, accounts: &[AccountId]) {
-        for &account in accounts {
-            if let Err(e) = self.instagram_session(account).await {
-                warn!(account = %account, error = %e, "Instagram token check failed");
-            }
-        }
+            user_id,
+        })
     }
 }
 

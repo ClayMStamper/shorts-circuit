@@ -6,6 +6,7 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shorts_domain::Platform;
+use shorts_domain::instagram::InstagramLogin;
 
 /// A secret string. `Debug` never shows it; read it with [`Secret::expose`].
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,12 +46,15 @@ pub enum CloudCredential {
         refresh_token: Secret,
         channel_id: String,
     },
-    /// A long-lived token, renewable once a day old.
+    /// With Facebook login, the linked Page's token (it doesn't expire) and the Instagram
+    /// account id. Older credentials (Instagram Login, no `login` field) can't publish.
     InstagramReels {
         access_token: Secret,
         user_id: String,
-        issued_at: DateTime<Utc>,
-        expires_at: DateTime<Utc>,
+        #[serde(default)]
+        login: InstagramLogin,
+        #[serde(default)]
+        expires_at: Option<DateTime<Utc>>,
     },
     /// A 60-day token for a Company Page; not refreshable.
     Linkedin {
@@ -109,5 +113,19 @@ mod tests {
         assert!(json.contains(r#""platform":"youtube_shorts""#));
         assert_eq!(serde_json::from_str::<CloudCredential>(&json).unwrap(), c);
         assert_eq!(c.platform(), Platform::YoutubeShorts);
+    }
+
+    #[test]
+    fn instagram_credentials_from_before_facebook_login_still_read() {
+        let old = r#"{"platform":"instagram_reels","access_token":"fake-igaa","user_id":"1",
+            "issued_at":"2026-10-01T00:00:00Z","expires_at":"2026-11-30T00:00:00Z"}"#;
+        let CloudCredential::InstagramReels {
+            login, expires_at, ..
+        } = serde_json::from_str(old).unwrap()
+        else {
+            panic!("an Instagram credential");
+        };
+        assert_eq!(login, InstagramLogin::InstagramLogin);
+        assert!(expires_at.is_some());
     }
 }
