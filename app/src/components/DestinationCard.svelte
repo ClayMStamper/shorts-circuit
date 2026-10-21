@@ -17,9 +17,11 @@
     ],
     instagram_reels: [
       { text: "In Instagram, switch to a Creator or Business account (Settings → Account type and tools)." },
-      { text: "Create a Meta app with the Instagram API product.", link: { label: "Meta for Developers", url: "https://developers.facebook.com/apps/" } },
-      { text: "App roles → add your account as an Instagram Tester and accept the invite in Instagram." },
-      { text: "Instagram → API setup with Instagram login → Generate token, then paste it below." },
+      { text: "Link it to your Facebook Page: on the Page, Settings → Linked accounts → Instagram → Connect.", link: { label: "Facebook Pages", url: "https://www.facebook.com/pages/?category=your_pages" } },
+      { text: "In your Meta app, choose Instagram → “API setup with Facebook login”.", link: { label: "Meta for Developers", url: "https://developers.facebook.com/apps/" } },
+      { text: "Graph API Explorer: pick your app, add instagram_basic, instagram_content_publish, pages_show_list, pages_read_engagement and business_management, then Generate Access Token and allow your Page.", link: { label: "Graph API Explorer", url: "https://developers.facebook.com/tools/explorer/" } },
+      { text: "Access Token Debugger: paste that token, click Extend Access Token, copy the long-lived token.", link: { label: "Access Token Debugger", url: "https://developers.facebook.com/tools/debug/accesstoken/" } },
+      { text: "Paste it below, click Find my Pages and pick your Page." },
     ],
     linkedin: [
       { text: "Create a LinkedIn app linked to your Company Page.", link: { label: "LinkedIn Developers", url: "https://www.linkedin.com/developers/apps/new" } },
@@ -84,7 +86,9 @@
   // One next step, whatever state the connection is in.
   const next = $derived(
     reconnect.length
-      ? `Reconnect ${reconnect[0]?.displayName}: its sign-in ended. Posts wait and continue once you do.`
+      ? platform === "instagram_reels" && reconnect[0]?.missingReason?.includes("Instagram login")
+        ? `Reconnect ${reconnect[0]?.displayName} with Facebook login: Instagram login can't upload files, so its videos become export packages until you do.`
+        : `Reconnect ${reconnect[0]?.displayName}: its sign-in ended. Posts wait and continue once you do.`
       : connected.length
         ? null
         : "Follow the steps, then connect below.",

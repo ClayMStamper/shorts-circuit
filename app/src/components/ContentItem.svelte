@@ -142,6 +142,9 @@
           {#if p.actions.includes("publishNow") && p.state !== "awaiting_approval"}
             <button class="small" disabled={busy} onclick={() => run(() => api.publishNow(p.id), "Publishing now")}>Publish now</button>
           {/if}
+          {#if p.actions.includes("resolveUserAction")}
+            <button class="primary small" disabled={busy} onclick={() => run(() => api.resolveUserAction(p.id), "Retrying")}>Retry</button>
+          {/if}
           {#if p.actions.includes("retry")}
             <button class="primary small" disabled={busy} onclick={() => run(() => api.retryPublication(p.id), "Retrying")}>Retry</button>
           {/if}

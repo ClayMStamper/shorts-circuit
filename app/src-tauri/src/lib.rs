@@ -42,7 +42,8 @@ pub struct Shell {
     pub tiktok: Arc<TikTokIntake>,
     /// YouTube Shorts publishing; channels are connected in Settings.
     pub youtube: Arc<YouTubeConnector>,
-    /// Instagram Reels publishing; accounts are connected in Settings with a pasted token.
+    /// Instagram Reels publishing; accounts are connected through their Facebook Page with a
+    /// pasted token.
     pub instagram: Arc<InstagramConnector>,
     /// LinkedIn Company Page posts; pages are connected in Settings with a pasted token.
     pub linkedin: Arc<LinkedInConnector>,
@@ -281,6 +282,7 @@ pub fn run() {
             commands::youtube_disconnect,
             commands::youtube_set_public_uploads,
             commands::instagram_status,
+            commands::instagram_find_pages,
             commands::instagram_connect,
             commands::instagram_disconnect,
             commands::linkedin_status,

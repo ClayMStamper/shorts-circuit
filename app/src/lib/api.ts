@@ -14,6 +14,8 @@ import type {
   ConnectProgress,
   EditPublication,
   ImportResult,
+  InstagramLogin,
+  InstagramPages,
   InstagramStatus,
   LinkedInOrganization,
   LinkedInStatus,
@@ -173,8 +175,9 @@ export const api = {
 
   // Instagram publishing
   instagramStatus: () => call<InstagramStatus>("instagram_status"),
-  instagramConnect: (accessToken: string, accountId: string | null) =>
-    call<InstagramStatus>("instagram_connect", { accessToken, accountId }),
+  instagramFindPages: (accessToken: string) => call<InstagramPages>("instagram_find_pages", { accessToken }),
+  instagramConnect: (accessToken: string, login: InstagramLogin, pageId: string | null, accountId: string | null) =>
+    call<InstagramStatus>("instagram_connect", { accessToken, login, pageId, accountId }),
   instagramDisconnect: (accountId: string) => call<InstagramStatus>("instagram_disconnect", { accountId }),
 
   // LinkedIn publishing

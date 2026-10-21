@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use shorts_adapters::linkedin::Organization;
-use shorts_desktop::instagram::InstagramStatus;
+use shorts_desktop::instagram::{InstagramPages, InstagramStatus};
 use shorts_desktop::linkedin::LinkedInStatus;
 use shorts_desktop::snapchat::{SnapConnectProgress, SnapStatus};
 use shorts_desktop::tiktok::{CheckReport, ConnectProgress, TikTokAppInfo, TikTokStatus};
@@ -19,6 +19,7 @@ use shorts_desktop::{
     AppError, AssetUpdate, EditPublication, ImportOutcome, LibraryQuery, NewPublication,
     NewWorkflow, Preferences, PreferencesUpdate, RuleInput, ScheduleInput, WorkflowUpdate,
 };
+use shorts_domain::instagram::InstagramLogin;
 use shorts_domain::{
     AccountId, AssetId, CollectionId, JobId, OutcomeResolution, Platform, PublicationId,
     RenderRecipe, RuleId, VariantId, WorkflowId,
@@ -581,15 +582,42 @@ pub async fn instagram_status(shell: State<'_, Shell>) -> Result<InstagramStatus
     shell.instagram.status().await
 }
 
-/// Connects the Instagram account a pasted long-lived token belongs to. The token goes to the
-/// OS credential store and is never sent back to the webview.
+/// The Facebook Pages a pasted user token manages, with their linked Instagram accounts. The
+/// token is not stored by this call.
+#[tauri::command]
+pub async fn instagram_find_pages(
+    shell: State<'_, Shell>,
+    access_token: String,
+) -> Result<InstagramPages> {
+    shell.instagram.find_pages(&access_token).await
+}
+
+/// Connects an Instagram account: with Facebook login, the one linked to `page_id` (or the only
+/// linked Page), keeping that Page's token; with Instagram login, the account the token
+/// belongs to (export packages only). Tokens go to the OS credential store and are never sent
+/// back to the webview.
 #[tauri::command]
 pub async fn instagram_connect(
     shell: State<'_, Shell>,
     access_token: String,
+    login: InstagramLogin,
+    page_id: Option<String>,
     account_id: Option<AccountId>,
 ) -> Result<InstagramStatus> {
-    shell.instagram.connect(&access_token, account_id).await?;
+    match login {
+        InstagramLogin::FacebookLogin => {
+            shell
+                .instagram
+                .connect(&access_token, page_id.as_deref(), account_id)
+                .await?
+        }
+        InstagramLogin::InstagramLogin => {
+            shell
+                .instagram
+                .connect_instagram_login(&access_token, account_id)
+                .await?
+        }
+    };
     shell.instagram.status().await
 }
 

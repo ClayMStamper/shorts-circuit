@@ -285,7 +285,10 @@ export function installMock(scenario: string): void {
       channels: [{ accountId: "yt", displayName: "Bake Lab", connected: true, needsReconnect: false, lastError: null, privateOnly: false, notes: [], connectedAt: ago(60 * 72), signInExpiresAt: null }],
       quota: { day: "2026-10-21", uploadsUsed: 3, uploadsLimit: 100, unitsUsed: 41, unitsLimit: 10000, resetsAt: ago(-600), warning: null },
     }),
-    instagram_status: () => ({ accounts: [], nextStep: null }),
+    instagram_status: () => ({
+      nextStep: null,
+      accounts: [{ accountId: "ig", displayName: "@bakelab", connected: true, needsReconnect: false, login: "facebook_login", canPublish: true, pageName: "Bake Lab", username: "bakelab", lastError: null, notes: [], connectedAt: ago(60 * 72) }],
+    }),
     linkedin_status: () => ({ pages: [], nextStep: null }),
     snapchat_status: () => ({ clientConfigured: false, redirectUri: "http://127.0.0.1:47615/snapchat/callback", returnMode: "loopback", nextStep: "Paste your Snap OAuth app.", connecting: false, awaitingCode: false, profiles: [] }),
     cloud_status: () => ({ enabled: false, url: null, tokenSaved: false, held: 0, lastSyncAt: null, lastError: null, nextStep: null }),

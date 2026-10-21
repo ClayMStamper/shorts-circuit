@@ -656,22 +656,43 @@ export interface YouTubeStatus {
   quota: QuotaReport;
 }
 
+/** How an Instagram account is connected. Only Facebook login uploads files. */
+export type InstagramLogin = "facebook_login" | "instagram_login";
+
 export interface InstagramAccount {
   accountId: string;
   displayName: string;
   connected: boolean;
   needsReconnect: boolean;
+  login: InstagramLogin | null;
+  /** Connected with Facebook login and able to publish. */
+  canPublish: boolean;
+  pageName: string | null;
+  username: string | null;
   lastError: string | null;
   notes: string[];
   connectedAt: string | null;
-  tokenExpiresAt: string | null;
-  renewedAt: string | null;
 }
 
 export interface InstagramStatus {
   accounts: InstagramAccount[];
-  /** What to do first, while no account is connected. */
+  /** What to do first, while no account publishes. */
   nextStep: string | null;
+}
+
+/** A Facebook Page a pasted token manages. */
+export interface InstagramPageChoice {
+  pageId: string;
+  pageName: string;
+  /** The linked Instagram professional account, if any. */
+  instagramUsername: string | null;
+}
+
+export interface InstagramPages {
+  /** Pages with a linked Instagram account first. */
+  pages: InstagramPageChoice[];
+  /** Said when the token's lifetime couldn't be read. */
+  warning: string | null;
 }
 
 export interface LinkedInPage {
