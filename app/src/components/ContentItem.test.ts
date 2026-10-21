@@ -51,6 +51,7 @@ function capture() {
       calls.push([cmd, args]);
       if (cmd === "thumbnail") return null as never;
       if (cmd === "open_link" || cmd === "cancel_get_original" || cmd === "attach_original") return undefined as never;
+      if (cmd === "send_to_workflows") return 2 as never;
       if (cmd === "get_original") return { downloadsFolder: "C:\Users\clay\Downloads", enabledNow: true } as never;
       throw new Error(`unexpected ${cmd}`);
     }) as never,
@@ -115,5 +116,14 @@ describe("Waiting for a download", () => {
     expect(screen.queryByTestId("get-original")).toBeNull();
     await fireEvent.click(screen.getByTestId("cancel-original"));
     expect(calls).toContainEqual(["cancel_get_original", { assetId: "a1" }]);
+  });
+});
+
+describe("Send through workflows", () => {
+  it("is offered when nothing was published, and runs the workflows", async () => {
+    const calls = capture();
+    render(ContentItem, { item: { ...item(null), publications: [] } });
+    await fireEvent.click(screen.getByTestId("send-to-workflows"));
+    await vi.waitFor(() => expect(calls).toContainEqual(["send_to_workflows", { assetId: "a1" }]));
   });
 });

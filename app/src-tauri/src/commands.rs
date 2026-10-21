@@ -846,6 +846,13 @@ pub async fn get_original(
     Ok(result)
 }
 
+/// "Send through workflows": runs the workflows for an item that never reached them. Returns how
+/// many publications were created.
+#[tauri::command]
+pub async fn send_to_workflows(shell: State<'_, Shell>, asset_id: AssetId) -> Result<usize> {
+    Ok(shell.app.send_to_workflows(asset_id).await?.len())
+}
+
 #[tauri::command]
 pub async fn cancel_get_original(shell: State<'_, Shell>, asset_id: AssetId) -> Result<()> {
     shell.app.cancel_expect_original(asset_id).await
