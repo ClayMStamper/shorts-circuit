@@ -3,6 +3,7 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type {
   AccountView,
+  ActivityView,
   AppError,
   AssetDetail,
   AssetSummary,
@@ -34,8 +35,14 @@ import type {
   SnapConnectProgress,
   SnapStatus,
   TagCount,
+  TikTokAppInfo,
   TikTokStatus,
   VariantView,
+  NewWorkflow,
+  WorkflowDetailView,
+  WorkflowUpdate,
+  WorkflowView,
+  WorkflowsView,
   YouTubeConnectProgress,
   YouTubeStatus,
 } from "./types";
@@ -67,6 +74,17 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 }
 
 export const api = {
+  // Workflows (the home screen) and activity
+  listWorkflows: () => call<WorkflowsView>("list_workflows"),
+  workflowDetail: (id: string) => call<WorkflowDetailView>("workflow_detail", { id }),
+  createWorkflow: (workflow: NewWorkflow) => call<WorkflowView>("create_workflow", { workflow }),
+  updateWorkflow: (id: string, update: WorkflowUpdate) => call<WorkflowView>("update_workflow", { id, update }),
+  deleteWorkflow: (id: string) => call<void>("delete_workflow", { id }),
+  checkForNewContent: () => call<WorkflowsView>("check_for_new_content"),
+  activity: (limit?: number) => call<ActivityView>("activity", { limit: limit ?? null }),
+  publishNow: (id: string) => call<PublicationView>("publish_now", { id }),
+  republish: (id: string) => call<PublicationView>("republish", { id }),
+
   // Library
   listAssets: (query: LibraryQuery) => call<AssetSummary[]>("list_assets", { query }),
   assetDetail: (id: string) => call<AssetDetail>("asset_detail", { id }),
@@ -128,6 +146,10 @@ export const api = {
 
   // TikTok new-post detection and matching
   tiktokStatus: () => call<TikTokStatus>("tiktok_status"),
+  tiktokAppInfo: () => call<TikTokAppInfo>("tiktok_app_info"),
+  tiktokSetApp: (clientKey: string, clientSecret: string) =>
+    call<TikTokStatus>("tiktok_set_app", { clientKey, clientSecret }),
+  tiktokClearApp: () => call<TikTokStatus>("tiktok_clear_app"),
   tiktokSetEnabled: (enabled: boolean) => call<TikTokStatus>("tiktok_set_enabled", { enabled }),
   tiktokConnect: () => call<void>("tiktok_connect"),
   tiktokFinishConnect: () => call<ConnectProgress>("tiktok_finish_connect"),

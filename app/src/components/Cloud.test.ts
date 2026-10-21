@@ -94,6 +94,11 @@ const publication: PublicationView = {
   owner: "cloud",
   cloudNote: "Not on the cloud runner yet: could not connect",
   updatedAt: "2026-10-30T12:00:00Z",
+  statusLabel: "Scheduled",
+  tone: "info",
+  approvedBy: null,
+  blockers: [],
+  publishedPrivate: false,
 };
 
 describe("Monitor in cloud mode", () => {

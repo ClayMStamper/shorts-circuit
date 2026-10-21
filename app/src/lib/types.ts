@@ -42,7 +42,8 @@ export type Action =
   | "exportPackage"
   | "reconnect"
   | "sendToCloud"
-  | "takeBack";
+  | "takeBack"
+  | "republish";
 
 /** Who runs a publication: this computer, or the optional cloud runner. */
 export type ExecutionOwner = "desktop" | "cloud";
@@ -260,6 +261,15 @@ export interface PublicationView {
   /** E.g. "YouTube is processing the video (50%)". */
   progressText: string | null;
   statusText: string;
+  /** The short status pill: "Published", "Processing 40%", "Waiting for review", … */
+  statusLabel: string;
+  tone: Tone;
+  /** `owner`, `workflow:<name>` or `rule:<name>`. */
+  approvedBy: string | null;
+  /** While waiting for review: what would stop it from being approved. */
+  blockers: string[];
+  /** A YouTube upload that ended up private. */
+  publishedPrivate: boolean;
   actions: Action[];
   owner: ExecutionOwner;
   /** While the cloud runner owns it: a problem reaching the runner, if any. */
@@ -476,6 +486,9 @@ export interface RuleItemView {
   sourcePostedAt: string | null;
   /** In the collection, but the original file hasn't arrived yet. */
   waitingForMedia: boolean;
+  /** Why nothing has been created yet, e.g. waiting for its TikTok caption. */
+  waitingReason: string | null;
+  addedAt: string;
   publications: PublicationView[];
 }
 
@@ -513,6 +526,99 @@ export interface RuleInput {
   includeAssetTags: boolean;
   /** Only videos entering from this instant; omitted means now (or unchanged when editing). */
   effectiveFrom?: string | null;
+}
+
+export type Tone = "good" | "info" | "warn" | "bad" | "muted";
+
+export type PostingMode = "asap" | "slots";
+
+export type WorkflowStatus = "active" | "inactive" | "needs_reconnect";
+
+export interface WorkflowView {
+  id: string;
+  name: string;
+  ruleId: string;
+  accountId: string;
+  accountName: string;
+  platform: Platform;
+  platformName: string;
+  sourceName: string;
+  enabled: boolean;
+  autoPublish: boolean;
+  autoPublishAvailable: boolean;
+  status: WorkflowStatus;
+  statusText: string;
+  /** What the workflow does in plain words. */
+  banner: string;
+  rightsConfirmed: boolean;
+  posting: PostingMode;
+  shareToFeed: boolean | null;
+  captionTemplate: string;
+  hashtags: string[];
+  effectiveFrom: string;
+  privateOnly: boolean;
+  itemCount: number;
+  createdAt: string;
+}
+
+export interface WorkflowSuggestion {
+  accountId: string;
+  accountName: string;
+  platform: Platform;
+  platformName: string;
+  name: string;
+}
+
+export interface SourceView {
+  name: string;
+  watchFolder: string | null;
+  watchCheckedAt: string | null;
+  tiktokConnected: boolean;
+}
+
+export interface WorkflowsView {
+  workflows: WorkflowView[];
+  suggestions: WorkflowSuggestion[];
+  source: SourceView;
+}
+
+export interface WorkflowDetailView {
+  workflow: WorkflowView;
+  items: RuleItemView[];
+}
+
+export interface ActivityView {
+  items: RuleItemView[];
+}
+
+export interface NewWorkflow {
+  accountId: string;
+  name?: string | null;
+  autoPublish: boolean;
+  rightsConfirmed: boolean;
+  effectiveFrom?: string | null;
+  settings?: { posting: PostingMode; share_to_feed?: boolean | null };
+  captionTemplate?: string | null;
+  hashtags?: string[];
+}
+
+export interface WorkflowUpdate {
+  name?: string;
+  enabled?: boolean;
+  autoPublish?: boolean;
+  rightsConfirmed?: boolean;
+  posting?: PostingMode;
+  shareToFeed?: boolean | null;
+  captionTemplate?: string;
+  hashtags?: string[];
+  effectiveFrom?: string;
+}
+
+export interface TikTokAppInfo {
+  appConfigured: boolean;
+  clientKey: string | null;
+  brokerConfigured: boolean;
+  redirectUri: string;
 }
 
 export interface AppError {
