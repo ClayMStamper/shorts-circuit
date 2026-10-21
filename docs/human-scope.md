@@ -55,7 +55,7 @@ happen in **Connections** (one card per platform, plus the source).
 |---|---|---|
 | Snapchat | Create a Snap OAuth app in Ads Manager, apply for Public Profile API allowlisting with its client id; own a Snapchat Public Profile (details below). | External approval with unknown turnaround. Until granted, Snapchat uses the export package. |
 | YouTube | YouTube API compliance audit; Google OAuth verification for the `youtube.upload` scope (only needed to leave Testing mode). | Since 2020, unaudited projects have had uploads locked to private (Google's current `videos.insert` page now says they aren't; the app uploads private until you say otherwise, see below). Default quota: 100 uploads a day in their own bucket, plus 10,000 units for everything else; the audit / quota extension form is how either is raised. |
-| Instagram | Meta App Review for `instagram_business_content_publish`, possibly Business Verification (only to publish for accounts that aren't on your app). | Not a gate for you: your own professional account, added to the app as an Instagram tester, publishes without review (see below). |
+| Instagram | Meta App Review for `instagram_content_publish` and the Pages permissions, possibly Business Verification (only to publish for accounts that aren't on your app). | Not a gate for you: as the app's admin, your own Page and professional account publish with the app in Development mode, without review (see below). |
 | LinkedIn | Developer app linked to a verified Company Page you administer. | Member posting is self-serve; organization posting needs the Community Management API on its own dedicated app. |
 | TikTok (optional) | Register a TikTok developer app for new-post detection (captions from your posts) and get it through TikTok's app review (details below). | Only needed to use TikTok captions; without it captions come from caption files or file names, and the watch folder still imports originals. Review turnaround is outside our control. |
 
@@ -161,53 +161,79 @@ above are the smoke test; in addition:
 
 ### Instagram Reels (second publishing connector)
 
-The app publishes Reels through the Instagram API with Instagram Login, uploading the file
-straight from your PC. You connect an account by pasting a token from your Meta app's
-dashboard, so there is no redirect address to host and no app secret in the app. What you do
-once:
+The app publishes Reels through the **Instagram API with Facebook Login**: your Instagram
+professional account is linked to your Facebook Page, and the app uploads the video file
+straight from your PC with the Page's token. (The Instagram Login setup used before can't upload
+files: Instagram answered "The parameter video_url is required", because that kind of app may
+only point Instagram at a public video address.) You connect by pasting a token, so there is no
+redirect address to host and no app secret in the app. What you do once:
 
 1. **Professional account.** In the Instagram app: Settings → Account type and tools → switch
-   to a **Creator** or **Business** account (free; no Facebook Page needed).
-2. **Meta app.** At developers.facebook.com → My Apps → Create app. Pick the use case for
-   managing messaging and content on Instagram (the "Instagram API" product), app type
-   Business if asked. The app can stay in **Development** mode.
-3. **Add your account as a tester.** App dashboard → App roles → Roles → Add people →
-   **Instagram Tester** → your Instagram username. Accept the invitation in Instagram (Settings
-   → Website permissions / Apps and websites → Tester invites), or on instagram.com.
-4. **Permissions.** Instagram → API setup with Instagram login: make sure
-   `instagram_business_basic` and `instagram_business_content_publish` are included.
-5. **Generate the token.** Same page → Generate access tokens → Add account → sign in to the
-   professional account → allow → **Generate token**. Copy it (it starts with `IGAA`). It is a
-   long-lived token (60 days).
-6. **Paste it into the app.** Connections → Instagram Reels → Access token → Connect.
-   The token goes to Windows Credential Manager (`instagram:<account id>`), never into the
-   database, logs, or the repo.
-7. **Keeping it alive.** The app renews the token for another 60 days whenever it has less
-   than 20 days left, as long as the app runs at least every few weeks. If it lapses (or you
-   remove the app's access in Instagram), the account shows *needs reconnecting*: generate a
-   new token (step 5) and paste it with **Reconnect**. Waiting publications then continue.
+   to a **Creator** or **Business** account, if it isn't one already.
+2. **Link it to your Facebook Page** (Timeless Way Interactive). On Facebook, switch to the
+   Page → Settings → **Linked accounts** → Instagram → Connect, and sign in to the Instagram
+   account. (Or, in the Instagram app: Edit profile → Page → connect the Page.) You must be an
+   admin of the Page.
+3. **Meta app.** At developers.facebook.com → My Apps → your app ("Shorts Circuit", which has
+   Facebook Login for Business). In its Instagram use case choose **API setup with Facebook
+   login**. Leave the app in **Development** mode: you are its admin, so no App Review is
+   needed for your own Page.
+4. **Permissions.** In that setup, make sure these are added: `instagram_basic`,
+   `instagram_content_publish`, `pages_show_list`, `pages_read_engagement`,
+   `business_management`.
+5. **Generate a token.** Open **Graph API Explorer** (developers.facebook.com/tools/explorer)
+   → Meta App: your app → User or Page: *Get User Access Token* → add the five permissions
+   above → **Generate Access Token**. In Facebook's dialog, continue as yourself, **choose your
+   Page** (and the Instagram account if asked) and allow everything. Copy the token (it starts
+   with `EAA`). It lasts about an hour.
+6. **Extend it.** Open the **Access Token Debugger** (developers.facebook.com/tools/debug/
+   accesstoken), paste the token → Debug → **Extend Access Token** at the bottom → copy the new
+   token. Debug the new one: *Expires* should say about 60 days (or Never).
+7. **Paste it into the app.** Connections → Instagram Reels → Manage connection → **Facebook
+   login (recommended)** → paste into *Long-lived user access token* → **Find my Pages**. With
+   one linked Page it connects straight away; with several, choose the Page and **Connect**.
+   The card then shows *Connected* with `@clay_stamper` and the Page's name. The app keeps only
+   the Page's token, which doesn't expire, in Windows Credential Manager
+   (`instagram:<account id>`), never in the database, logs, or the repo; the pasted user token
+   isn't stored.
+
+If something is wrong, the app says what to do: no Pages (choose the Page when generating the
+token), no linked Instagram account (step 2), missing permissions (it names them; add them in
+step 5), or a short-lived token (step 6). If it says it couldn't tell how long the token lasts,
+check *Expires* in the Access Token Debugger as in step 6.
+
+**Your existing connection.** The account you connected earlier with Instagram login stays,
+marked **reconnect with Facebook login**; until you do, its videos become export packages
+instead of failing. Use **Reconnect @… with Facebook login…** on it (steps 5–7) so its
+workflow carries on. **Instagram login (export packages only)** stays available as a connection
+type, but it can't upload files.
+
+**If it later says *needs reconnecting*.** Page tokens don't expire, but Meta ends them if you
+change your Facebook password, remove the app (Facebook → Settings & privacy → Business
+integrations), lose admin rights on the Page or remove a permission. Publications then stop at
+*Needs authentication*; do steps 5–7 again with **Reconnect**, and they continue.
 
 Confirm the dashboard names and permission names when you do this; Meta renames them often.
-App Review is only needed if the app should publish for Instagram accounts that aren't on
-your app's roles.
+This same Page connection could later publish Facebook Reels too (not built yet).
 
 ### Instagram smoke test (Windows)
 
-Use a test professional account the first time if you have one; Reels published here are
-public.
+Reels published here are public on your profile.
 
-1. Do the Instagram steps above; its card shows *Connected* (the account's "good until" date is
-   under Manage connection, about 60 days out).
-2. Workflows → **Create workflow** → Instagram Reels (Auto Publish on, rights ticked). Optionally
-   untick **Also share to the main feed** in its Settings.
-3. Drop a short MP4 (3 seconds to a few minutes; vertical 1080×1920 looks best) into the watch
-   folder. The workflow's page shows *Processing* → *Published* with a link to the reel. Open it
-   to check the caption and hashtags.
+1. Do the Instagram steps above; the card shows *Connected* with your username and the Page.
+2. **The stuck reel.** Open the Instagram workflow: the video that stopped at *Needs you*
+   ("The parameter video_url is required") has a **Retry** button. Click it: it goes
+   *Preparing video* → *Processing* → *Published* with **Open on Instagram Reels**. Check the
+   caption and hashtags on Instagram.
+3. Drop another short MP4 (3 seconds to a few minutes; vertical 1080×1920 looks best) into the
+   watch folder; with Auto Publish on it goes out with no clicks.
 4. Optional: quit the app during *Processing* with a larger file and start it again; the upload
-   repeats into the same container instead of creating a second post.
-5. Record the container id, the media id and anything surprising (error codes, how long
-   processing took) in the PR or an issue.
-
+   continues from where Instagram says it stopped (or isn't sent again if it had all arrived)
+   instead of creating a second post.
+5. Record in the PR or an issue: the container id, the media id, how long processing took, any
+   error codes, and in particular whether the items listed as *assumed* under "Instagram Reels
+   connector" in `docs/architecture.md` held (the `video_status` answer during an upload, and
+   whether connecting reported the token's expiry or said it couldn't tell).
 ### LinkedIn Company Page (third publishing connector)
 
 The app posts videos as your Company Page. LinkedIn's Community Management API is the gate:
@@ -361,8 +387,8 @@ Prefer the original export over a video saved back from TikTok, which carries a 
 
 - Domain: OAuth redirects, Google domain verification, privacy-policy hosting.
 - OAuth backend hosting (Axum): **not needed for publishing to YouTube, Instagram, LinkedIn
-  or Snapchat, nor for TikTok captions** (YouTube uses a desktop OAuth client; Instagram and
-  LinkedIn are connected with pasted tokens; Snapchat and TikTok use your own developer apps,
+  or Snapchat, nor for TikTok captions** (YouTube uses a desktop OAuth client; Instagram (through
+  the Facebook Page) and LinkedIn are connected with pasted tokens; Snapchat and TikTok use your own developer apps,
   pasted into the app, with loopback redirects). Needed only for a browser sign-in flow if the
   app is shared with other people.
 - Cloud runner hosting (a small VPS with PostgreSQL and a domain): only for cloud mode, i.e.
@@ -426,8 +452,8 @@ you can do:
   review, or when a video can't go out as is (the workflow page says why: too long for
   Spotlight, a permission recorded as denied). Resolving `OutcomeUnknown` publishes (for one the
   cloud runner reports, take it back to the PC first).
-- Keeping the app running at least every few weeks so Instagram tokens get renewed, or pasting
-  a new token when an account says *needs reconnecting*.
+- Pasting a new token when an account says *needs reconnecting* (Instagram's Page token only
+  ends if Meta revokes it).
 - Switching a YouTube channel to public uploads once the Google Cloud project passes the API
   audit.
 - Re-authentication: Google refresh tokens expire after 7 days while the consent screen is in
