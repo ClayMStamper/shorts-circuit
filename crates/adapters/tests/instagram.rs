@@ -445,6 +445,76 @@ async fn an_unreadable_upload_status_sends_the_whole_file() {
     ));
 }
 
+/// Sends the file to an upload host that answers 400 with `body`.
+async fn upload_refused_with(body: serde_json::Value) -> AdapterError {
+    let f = Fixture::new().await;
+    f.mock_container().await;
+    f.mock_received(Some(0), None).await;
+    Mock::given(method("POST"))
+        .and(path("/ig-api-upload/v24.0/c1"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(body))
+        .mount(&f.server)
+        .await;
+    let a = f.adapter(Tokens::new(&["EAA-page-one"]));
+    let s = f.submission();
+    let cp = a.begin_upload(&s).await.unwrap();
+    a.upload_step(&s, cp).await.unwrap_err()
+}
+
+#[tokio::test]
+async fn an_upload_refusal_names_the_upload_hosts_reason() {
+    let err = upload_refused_with(json!({ "debug_info": {
+        "retriable": false,
+        "type": "ProcessingFailedError",
+        "message": "{\"success\":false,\"error\":{\"message\":\"Video file is corrupt\"}}"
+    }}))
+    .await;
+    let AdapterError::Invalid { issues } = &err else {
+        panic!("a final refusal needs the owner: {err:?}");
+    };
+    assert_eq!(
+        issues,
+        &["Instagram rejected the reel: Video file is corrupt (ProcessingFailedError)"]
+    );
+}
+
+#[tokio::test]
+async fn a_retriable_upload_refusal_is_sent_again() {
+    let err = upload_refused_with(json!({ "debug_info": {
+        "retriable": true,
+        "type": "ProcessingFailedError",
+        "message": "Request processing failed"
+    }}))
+    .await;
+    let AdapterError::Transient { message, .. } = &err else {
+        panic!("a retriable refusal is retried: {err:?}");
+    };
+    assert!(message.contains("Request processing failed"), "{message}");
+}
+
+#[tokio::test]
+async fn an_upload_refusal_that_isnt_json_shows_its_text() {
+    let f = Fixture::new().await;
+    f.mock_container().await;
+    f.mock_received(Some(0), None).await;
+    Mock::given(method("POST"))
+        .and(path("/ig-api-upload/v24.0/c1"))
+        .respond_with(ResponseTemplate::new(400).set_body_string("Bad   request:\n missing header"))
+        .mount(&f.server)
+        .await;
+    let a = f.adapter(Tokens::new(&["EAA-page-one"]));
+    let s = f.submission();
+    let cp = a.begin_upload(&s).await.unwrap();
+    let err = a.upload_step(&s, cp).await.unwrap_err();
+    let AdapterError::Invalid { issues } = &err else {
+        panic!("{err:?}");
+    };
+    assert_eq!(
+        issues,
+        &["Instagram rejected the reel: Bad request: missing header"]
+    );
+}
+
 #[tokio::test]
 async fn a_stale_container_is_replaced_before_uploading() {
     let f = Fixture::new().await;

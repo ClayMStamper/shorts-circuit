@@ -285,6 +285,54 @@ impl Default for InstagramConfig {
 struct ErrorBody {
     #[serde(default)]
     error: GraphError,
+    /// The upload host (`rupload.facebook.com`) answers in this shape instead of `error`.
+    #[serde(default)]
+    debug_info: Option<DebugInfo>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DebugInfo {
+    #[serde(default)]
+    retriable: bool,
+    #[serde(default, rename = "type")]
+    kind: Option<String>,
+    /// Plain text, or a JSON document such as `{"success":false,"error":{"message":…}}`.
+    #[serde(default)]
+    message: Option<String>,
+}
+
+impl DebugInfo {
+    fn into_graph_error(self) -> GraphError {
+        let message = self.message.unwrap_or_default();
+        let inner = serde_json::from_str::<serde_json::Value>(&message)
+            .ok()
+            .and_then(|v| {
+                v.pointer("/error/message")
+                    .or_else(|| v.pointer("/message"))
+                    .and_then(|m| m.as_str())
+                    .map(str::to_owned)
+            })
+            .unwrap_or(message);
+        let message = match (self.kind.filter(|k| !k.trim().is_empty()), inner.trim()) {
+            (Some(kind), "") => kind,
+            (Some(kind), text) => format!("{text} ({kind})"),
+            (None, text) => text.to_owned(),
+        };
+        GraphError {
+            message,
+            is_transient: self.retriable,
+            ..GraphError::default()
+        }
+    }
+}
+
+/// The start of an answer that isn't JSON, on one line, so the owner sees something.
+fn excerpt(body: &str) -> String {
+    let text = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    match text.char_indices().nth(200) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text,
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -302,6 +350,15 @@ struct GraphError {
 }
 
 impl GraphError {
+    fn is_empty(&self) -> bool {
+        self.code == 0
+            && self.message.trim().is_empty()
+            && self
+                .error_user_msg
+                .as_deref()
+                .is_none_or(|m| m.trim().is_empty())
+    }
+
     fn is_auth(&self, status: StatusCode) -> bool {
         status == StatusCode::UNAUTHORIZED || matches!(self.code, 102 | 190 | 463 | 467)
     }
@@ -457,13 +514,21 @@ fn transport(e: &reqwest::Error) -> AdapterError {
 
 async fn read_error(response: Response) -> (StatusCode, GraphError) {
     let status = response.status();
-    let body: ErrorBody = response
-        .text()
-        .await
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default();
-    (status, body.error)
+    let raw = response.text().await.unwrap_or_default();
+    let Ok(body) = serde_json::from_str::<ErrorBody>(&raw) else {
+        let message = excerpt(&raw);
+        return (
+            status,
+            GraphError {
+                message,
+                ..GraphError::default()
+            },
+        );
+    };
+    match body.debug_info {
+        Some(info) if body.error.is_empty() => (status, info.into_graph_error()),
+        _ => (status, body.error),
+    }
 }
 
 fn classify(status: StatusCode, e: &GraphError) -> AdapterError {
