@@ -1,0 +1,60 @@
+name: Policy pages
+
+# Publishes site/ (privacy policy, terms, data deletion) to GitHub Pages, which platform app
+# reviews ask for as public URLs. The operator name, contact email and effective date come from
+# repository variables so personal details aren't committed; the job refuses to publish while
+# any of them is missing.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["site/**", ".github/workflows/pages.yml"]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fill in operator details
+        env:
+          OPERATOR_NAME: ${{ vars.POLICY_OPERATOR_NAME }}
+          CONTACT_EMAIL: ${{ vars.POLICY_CONTACT_EMAIL }}
+          EFFECTIVE_DATE: ${{ vars.POLICY_EFFECTIVE_DATE }}
+        run: |
+          set -euo pipefail
+          for v in OPERATOR_NAME CONTACT_EMAIL EFFECTIVE_DATE; do
+            if [ -z "${!v}" ]; then
+              echo "::error::Set the repository variable POLICY_$v (Settings → Secrets and variables → Actions → Variables)."
+              exit 1
+            fi
+          done
+          mkdir -p _site
+          cp site/* _site/
+          python3 - <<'PY'
+          import html, os, pathlib
+          values = {k: html.escape(os.environ[k], quote=True) for k in ("OPERATOR_NAME", "CONTACT_EMAIL", "EFFECTIVE_DATE")}
+          for page in pathlib.Path("_site").glob("*.html"):
+              text = page.read_text(encoding="utf-8")
+              for k, v in values.items():
+                  text = text.replace("{{" + k + "}}", v)
+              if "{{" in text:
+                  raise SystemExit(f"{page.name} still has an unfilled placeholder")
+              page.write_text(text, encoding="utf-8")
+          PY
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4

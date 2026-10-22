@@ -208,7 +208,8 @@ impl App {
         if target.creator.is_none() {
             target.creator.clone_from(&awaiting.creator);
         }
-        if target.notes.trim().is_empty() {
+        // The post's caption wins over a sidecar or a note: it is what went out on TikTok.
+        if target.notes.trim().is_empty() || !awaiting.notes.trim().is_empty() {
             target.notes.clone_from(&awaiting.notes);
         }
         for tag in &awaiting.tags {
@@ -228,6 +229,43 @@ impl App {
         self.apply_rules_quietly(asset_id).await;
         self.summary(self.store.assets().require(asset_id).await?)
             .await
+    }
+
+    /// Confirms matches nobody needs to choose between: a pending post with exactly one
+    /// candidate file that is a candidate for no other post. Only once a workflow exists (the
+    /// workflow flow has no one to confirm them); otherwise suggestions wait for the user.
+    pub(crate) async fn auto_match(&self) {
+        match self.store.workflows().list().await {
+            Ok(w) if !w.is_empty() => {}
+            _ => return,
+        }
+        let suggestions = match self.match_suggestions().await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, "could not compute match suggestions");
+                return;
+            }
+        };
+        let mut per_post: HashMap<&str, usize> = HashMap::new();
+        let mut per_file: HashMap<&str, usize> = HashMap::new();
+        for s in &suggestions {
+            *per_post.entry(&s.post.video_id).or_default() += 1;
+            *per_file.entry(&s.candidate.asset_id).or_default() += 1;
+        }
+        for s in &suggestions {
+            if per_post[s.post.video_id.as_str()] != 1
+                || per_file[s.candidate.asset_id.as_str()] != 1
+            {
+                continue;
+            }
+            let Ok(asset_id) = s.candidate.asset_id.parse::<AssetId>() else {
+                continue;
+            };
+            match self.confirm_match(&s.post.video_id, asset_id).await {
+                Ok(_) => info!(asset = %asset_id, "matched to its TikTok post automatically"),
+                Err(e) => tracing::warn!(asset = %asset_id, error = %e, "automatic match failed"),
+            }
+        }
     }
 
     pub async fn dismiss_match(&self, video_id: &str, asset_id: AssetId) -> AppResult<()> {

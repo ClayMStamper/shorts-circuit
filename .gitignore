@@ -8,3 +8,6 @@ dist/
 .env
 .env.*
 !.env.example
+
+# FFmpeg sidecars fetched for release builds (scripts/fetch-ffmpeg.ps1)
+/app/src-tauri/binaries/

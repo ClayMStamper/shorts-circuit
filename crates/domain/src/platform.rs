@@ -2,14 +2,18 @@
 //!
 //! The limits below are meant for early warnings in review; each adapter re-validates against
 //! the provider's current rules. YouTube's come from [`crate::youtube`], checked against
-//! Google's docs in October 2026; the others are as understood in mid-2026 and still need
-//! confirming (see `docs/human-scope.md`).
+//! Google's docs in October 2026, Instagram's from [`crate::instagram`] and LinkedIn's from
+//! [`crate::linkedin`], and Snapchat's from [`crate::snapchat`]; all but YouTube's still need
+//! confirming against a real post (see `docs/human-scope.md`).
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::instagram;
+use crate::linkedin;
 use crate::media::MediaProperties;
+use crate::snapchat;
 use crate::youtube;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -62,28 +66,28 @@ impl Platform {
                 max_hashtags: youtube::MAX_HASHTAGS,
             },
             Self::InstagramReels => MediaRequirements {
-                min_duration_ms: 3_000,
-                max_duration_ms: 15 * 60_000,
-                max_file_bytes: 300 * 1024 * 1024,
+                min_duration_ms: instagram::MIN_DURATION_MS,
+                max_duration_ms: instagram::MAX_DURATION_MS,
+                max_file_bytes: instagram::MAX_FILE_BYTES,
                 require_vertical_or_square: false,
-                max_caption_chars: 2_200,
-                max_hashtags: 30,
+                max_caption_chars: instagram::CAPTION_MAX_CHARS,
+                max_hashtags: instagram::MAX_HASHTAGS,
             },
             Self::SnapchatSpotlight => MediaRequirements {
-                min_duration_ms: 5_000,
-                max_duration_ms: 60_000,
-                max_file_bytes: 1024 * 1024 * 1024,
+                min_duration_ms: snapchat::MIN_DURATION_MS,
+                max_duration_ms: snapchat::MAX_DURATION_MS,
+                max_file_bytes: snapchat::MAX_FILE_BYTES,
                 require_vertical_or_square: true,
-                max_caption_chars: 160,
-                max_hashtags: 10,
+                max_caption_chars: snapchat::DESCRIPTION_MAX_CHARS,
+                max_hashtags: snapchat::MAX_HASHTAGS,
             },
             Self::Linkedin => MediaRequirements {
-                min_duration_ms: 3_000,
-                max_duration_ms: 30 * 60_000,
-                max_file_bytes: 500 * 1024 * 1024,
+                min_duration_ms: linkedin::MIN_DURATION_MS,
+                max_duration_ms: linkedin::MAX_DURATION_MS,
+                max_file_bytes: linkedin::MAX_FILE_BYTES,
                 require_vertical_or_square: false,
-                max_caption_chars: 3_000,
-                max_hashtags: 30,
+                max_caption_chars: linkedin::COMMENTARY_MAX_CHARS,
+                max_hashtags: linkedin::MAX_HASHTAGS,
             },
         }
     }
@@ -130,6 +134,18 @@ pub enum ValidationIssue {
         max: usize,
     },
     TooManyHashtags {
+        count: usize,
+        max: usize,
+    },
+    /// Smaller than the platform's minimum resolution (Snapchat Spotlight: 540x960).
+    ResolutionTooLow {
+        width: u32,
+        height: u32,
+        min_width: u32,
+        min_height: u32,
+    },
+    /// More `@name` mentions than the platform allows (Instagram: 20).
+    TooManyMentions {
         count: usize,
         max: usize,
     },
@@ -188,6 +204,18 @@ impl fmt::Display for ValidationIssue {
             }
             Self::TooManyHashtags { count, max } => {
                 write!(f, "{count} hashtags; the maximum is {max}")
+            }
+            Self::ResolutionTooLow {
+                width,
+                height,
+                min_width,
+                min_height,
+            } => write!(
+                f,
+                "video is {width}x{height}; the minimum is {min_width}x{min_height}"
+            ),
+            Self::TooManyMentions { count, max } => {
+                write!(f, "{count} @mentions; the maximum is {max}")
             }
             Self::NotRendered => f.write_str("the variant has not been rendered yet"),
             Self::AudioPermissionMissing => {
@@ -303,6 +331,10 @@ mod tests {
     fn spotlight_rejects_long_and_horizontal_videos() {
         let req = Platform::SnapchatSpotlight.requirements();
         assert!(req.check(&vertical(30_000), 1, "", &[]).is_empty());
+        assert!(matches!(
+            req.check(&vertical(5_000), 1, "", &[])[..],
+            [ValidationIssue::TooShort { .. }]
+        ));
         assert!(matches!(
             req.check(&vertical(90_000), 1, "", &[])[..],
             [ValidationIssue::TooLong { .. }]

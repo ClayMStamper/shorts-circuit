@@ -10,19 +10,36 @@ use chrono::Duration;
 use reqwest::Url;
 use serde_json::{Value, json};
 use shorts_adapters::broker::challenge_for;
+use shorts_adapters::tiktok_oauth::{ChallengeEncoding, TikTokEndpoints};
 use shorts_desktop::credentials::{CredentialStore, MemoryCredentials};
 use shorts_desktop::tiktok::{ConnectProgress, TikTokIntake, TikTokSetup, TikTokStatus};
 use shorts_desktop::{AppEvent, ImportOutcome, LibraryQuery, RuleInput};
 use shorts_domain::{AssetId, Platform, PublicationState, RuleOutput};
 use shorts_store::PublicationFilter;
 use support::{Harness, harness};
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn setup(server: &MockServer) -> TikTokSetup {
     TikTokSetup {
-        broker_url: Url::parse(&server.uri()).unwrap(),
-        api_base: Url::parse(&server.uri()).unwrap(),
+        broker_url: Some(Url::parse(&server.uri()).unwrap()),
+        ..direct_setup(server)
+    }
+}
+
+/// No broker: the owner's own TikTok app against a fake TikTok.
+fn direct_setup(server: &MockServer) -> TikTokSetup {
+    let base = server.uri();
+    TikTokSetup {
+        broker_url: None,
+        api_base: Url::parse(&base).unwrap(),
+        oauth: TikTokEndpoints {
+            authorize: Url::parse(&format!("{base}/v2/auth/authorize/")).unwrap(),
+            token: Url::parse(&format!("{base}/v2/oauth/token/")).unwrap(),
+            revoke: Url::parse(&format!("{base}/v2/oauth/revoke/")).unwrap(),
+        },
+        loopback_port: 0,
+        challenge: ChallengeEncoding::Hex,
         poll_every: StdDuration::from_secs(3600),
     }
 }
@@ -241,6 +258,120 @@ async fn connecting_goes_through_the_broker_with_a_verifier() {
     assert!(stored.contains("test-access-token"));
     let settings: Option<Value> = h.app.store().settings().get("tiktok_source").await.unwrap();
     assert!(!settings.unwrap().to_string().contains("test-access-token"));
+}
+
+#[tokio::test]
+async fn the_owners_own_app_signs_in_directly_without_a_broker() {
+    let h = harness().await;
+    let server = MockServer::start().await;
+    user_info(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/v2/oauth/token/"))
+        .and(body_string_contains("grant_type=authorization_code"))
+        .and(body_string_contains("client_secret=test-secret"))
+        .and(body_string_contains("code=test-code"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(tokens("test-access-token")))
+        .mount(&server)
+        .await;
+    let credentials = Arc::new(MemoryCredentials::default());
+    let intake = TikTokIntake::new(
+        h.app.clone(),
+        Some(direct_setup(&server)),
+        credentials.clone(),
+    );
+
+    // Without the app the next step says what to register and paste.
+    match intake.status().await.unwrap() {
+        TikTokStatus::Unavailable { next_step, .. } => {
+            assert!(
+                next_step.contains("127.0.0.1:47616/callback/"),
+                "{next_step}"
+            )
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(intake.set_app("key", " ").await.is_err());
+    assert_eq!(
+        intake.set_app("test-key", "test-secret").await.unwrap(),
+        TikTokStatus::Off
+    );
+    let info = intake.app_info().unwrap();
+    assert!(info.app_configured);
+    assert_eq!(info.client_key.as_deref(), Some("test-key"));
+    assert!(
+        !serde_json::to_string(&info)
+            .unwrap()
+            .contains("test-secret")
+    );
+    intake.set_enabled(true).await.unwrap();
+
+    // A second Connect (e.g. after pasting a new key) takes the port over from the first.
+    intake.begin_connect().await.unwrap();
+    let url = intake.begin_connect().await.unwrap();
+    assert_eq!(url.path(), "/v2/auth/authorize/");
+    let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
+    assert_eq!(query["client_key"], "test-key");
+    assert_eq!(query["code_challenge_method"], "S256");
+    assert!(!url.as_str().contains("test-secret"));
+    assert_eq!(
+        intake.finish_connect().await.unwrap(),
+        ConnectProgress::Pending
+    );
+
+    // The browser comes back to the loopback address with the code.
+    let redirect = Url::parse(&query["redirect_uri"]).unwrap();
+    assert_eq!(redirect.host_str(), Some("127.0.0.1"));
+    assert_eq!(redirect.path(), "/callback/");
+    let mut back = redirect.clone();
+    back.query_pairs_mut()
+        .append_pair("state", &query["state"])
+        .append_pair("code", "test-code");
+    let page = reqwest::get(back).await.unwrap();
+    assert!(page.status().is_success());
+
+    let status = tokio::time::timeout(StdDuration::from_secs(5), async {
+        loop {
+            match intake.finish_connect().await.unwrap() {
+                ConnectProgress::Pending => tokio::time::sleep(StdDuration::from_millis(20)).await,
+                ConnectProgress::Connected { status } => return status,
+                ConnectProgress::Failed { message } => panic!("{message}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(
+        matches!(status, TikTokStatus::Connected { .. }),
+        "{status:?}"
+    );
+
+    // The exchange proved the verifier behind the (hex) challenge.
+    let exchange = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.url.path() == "/v2/oauth/token/")
+        .unwrap();
+    let body = String::from_utf8(exchange.body).unwrap();
+    let form: std::collections::HashMap<String, String> =
+        Url::parse(&format!("http://form.invalid/?{body}"))
+            .unwrap()
+            .query_pairs()
+            .into_owned()
+            .collect();
+    assert_eq!(
+        ChallengeEncoding::Hex.challenge(&form["code_verifier"]),
+        query["code_challenge"]
+    );
+    assert_eq!(form["redirect_uri"], query["redirect_uri"]);
+    assert!(
+        credentials
+            .get("tiktok")
+            .unwrap()
+            .unwrap()
+            .contains("test-access-token")
+    );
 }
 
 #[tokio::test]

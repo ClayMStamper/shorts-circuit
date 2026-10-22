@@ -28,8 +28,16 @@ const SHIPPED: &[(i64, &str)] = &[
         "417478e22ab0adeab79ad5be244495acedc66a428be0737d364a55c1cb9044f44df5750e4524586d3f47709ea2a9610b",
     ),
     (
+        5,
+        "9a8c62f478a9d7c75f7c1fc1bccaa1a0217212f470a06779bfddeb6a8f7cb5d60cad25a87a0c99308b893a926ef16498",
+    ),
+    (
         6,
         "07e65f58d9119922e9ce71f052500d01b082cdb39a9d78f474b48eab0322481fb6f62363e0e8ba8df3d3757bd923472f",
+    ),
+    (
+        7,
+        "10ad5af5ea61cf85e618bdeab9da9333fd7438587c6642bacf193cc63086b100d5db61cc0a8407e6f8b08401fa8e92ac",
     ),
 ];
 
@@ -123,6 +131,15 @@ async fn a_library_from_before_rule_start_dates_upgrades() {
         effective, "2026-10-17T19:30:00Z",
         "old rules count from creation"
     );
+}
+
+#[tokio::test]
+async fn a_library_from_before_workflows_upgrades_without_any() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("library.db");
+    old_library(&path, 6).await;
+    let store = Store::open(&path).await.unwrap();
+    assert!(store.workflows().list().await.unwrap().is_empty());
 }
 
 #[tokio::test]
