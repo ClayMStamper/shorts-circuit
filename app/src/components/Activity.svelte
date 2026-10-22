@@ -15,12 +15,22 @@
   let view = $state<ActivityView | null>(null);
   let platform = $state<Platform | "all">("all");
   let attention = $state(false);
+  let refreshing = $state(false);
 
   async function load() {
     try {
       view = await api.activity(200);
     } catch (e) {
       errorToast(e);
+    }
+  }
+
+  async function refresh() {
+    refreshing = true;
+    try {
+      await load();
+    } finally {
+      refreshing = false;
     }
   }
 
@@ -57,6 +67,9 @@
       <label class="check" style="flex-direction: row; font-size: var(--text-sm); color: var(--text)">
         <input type="checkbox" bind:checked={attention} /> Only what needs me
       </label>
+      <button onclick={refresh} disabled={refreshing} aria-busy={refreshing}>
+        {refreshing ? "Refreshing…" : "Refresh"}
+      </button>
     </div>
   </div>
   {#if !view}
