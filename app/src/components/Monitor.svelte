@@ -79,6 +79,10 @@
       case "reconnect":
         toast(`Reconnect ${p.accountName} under YouTube Shorts publishing; the upload continues by itself.`, "info");
         return onSettings();
+      case "sendToCloud":
+        return run(() => api.sendToCloud(p.id), "The cloud runner has it now.");
+      case "takeBack":
+        return run(() => api.takeBackFromCloud(p.id), "Back on this computer.");
     }
   }
 
@@ -113,7 +117,9 @@
             <td>{p.platformName}<br /><span class="muted">{p.accountName}</span></td>
             <td>
               <Badge state={p.state} />
+              {#if p.owner === "cloud"}<span class="note" data-testid="cloud-owned">cloud</span>{/if}
               <div class="status-text">{p.statusText}</div>
+              {#if p.cloudNote}<div class="note" data-testid="cloud-note">{p.cloudNote}</div>{/if}
               {#if p.progressFraction !== null && p.state === "uploading"}
                 <progress max="1" value={p.progressFraction}></progress> {Math.round(p.progressFraction * 100)}%
               {/if}

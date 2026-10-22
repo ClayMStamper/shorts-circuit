@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use shorts_domain::copy::Sidecar;
 use shorts_domain::{
     Asset, AssetId, AssetStatus, MediaFile, MediaFileId, PermissionStatus, Rating, RenderRecipe,
     Tag, Variant,
@@ -120,7 +121,13 @@ impl App {
                 }
                 (asset, false)
             }
-            None => (Asset::imported(&title_from(path), now)?, true),
+            None => {
+                let mut asset = Asset::imported(&title_from(path), now)?;
+                if let Some(sidecar) = read_sidecar(path).await {
+                    asset.notes = sidecar.caption_with_hashtags();
+                }
+                (asset, true)
+            }
         };
         asset.mark_media_attached(now);
 
@@ -184,6 +191,11 @@ impl App {
     /// membership and rule firings are idempotent, so nothing is created twice.
     pub async fn import_watched(&self, path: &Path) -> AppResult<ImportOutcome> {
         let outcome = self.import_file(path, None).await?;
+        if matches!(outcome, ImportOutcome::Imported { .. }) {
+            // A detected TikTok post this file is unambiguously the original of gives it the
+            // post's caption before any workflow uses it.
+            self.auto_match().await;
+        }
         self.route_watched(outcome.asset_id()).await;
         if let ImportOutcome::Imported { asset_id } = outcome {
             self.suggest_matches_for(asset_id).await;
@@ -445,6 +457,30 @@ impl App {
         let at_ms = (media.properties.duration_ms / 10).min(1_000);
         Ok(Some(self.media.thumbnail(&media, at_ms).await?))
     }
+}
+
+/// The caption file an editor or scheduler left next to the video: `<name>.json`, else
+/// `<name>.txt`. Missing, unreadable, oversized or empty files are ignored.
+async fn read_sidecar(video: &Path) -> Option<Sidecar> {
+    for (ext, parse) in [
+        ("json", Sidecar::from_json as fn(&str) -> Option<Sidecar>),
+        ("txt", Sidecar::from_text),
+    ] {
+        let path = video.with_extension(ext);
+        let Ok(meta) = tokio::fs::metadata(&path).await else {
+            continue;
+        };
+        if !meta.is_file() || meta.len() > Sidecar::MAX_BYTES {
+            continue;
+        }
+        let Ok(bytes) = tokio::fs::read(&path).await else {
+            continue;
+        };
+        if let Some(sidecar) = parse(&String::from_utf8_lossy(&bytes)) {
+            return Some(sidecar);
+        }
+    }
+    None
 }
 
 fn title_from(path: &Path) -> String {

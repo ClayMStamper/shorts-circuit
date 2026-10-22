@@ -40,6 +40,9 @@ pub enum AppError {
     NotFound(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// The cloud runner couldn't be reached or refused.
+    #[error(transparent)]
+    Cloud(#[from] shorts_cloud::ClientError),
 }
 
 impl AppError {
@@ -60,6 +63,7 @@ impl AppError {
             Self::Job(_) => "job",
             Self::Io(_) => "io",
             Self::Intake(_) => "intake",
+            Self::Cloud(_) => "cloud",
         }
     }
 }

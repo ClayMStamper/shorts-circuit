@@ -37,3 +37,19 @@ a { color: var(--link); }
 code { font-size: 0.9em; overflow-wrap: anywhere; }
 li { margin: 0.35rem 0; }
 .meta, .crumbs { color: var(--muted); font-size: 0.9rem; }
+.error { color: #b3261e; }
+@media (prefers-color-scheme: dark) { .error { color: #ff8a80; } }
+.copy { display: flex; gap: 0.5rem; align-items: flex-start; }
+.copy textarea {
+  flex: 1;
+  min-width: 0;
+  font: 0.9rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  padding: 0.5rem;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  resize: vertical;
+  overflow-wrap: anywhere;
+}
+.copy button { font: inherit; padding: 0.45rem 1rem; cursor: pointer; }

@@ -1,10 +1,17 @@
-//! Instagram Reels through the Instagram API with Instagram Login (`graph.instagram.com`).
+//! Instagram Reels through the Instagram API with Facebook Login (`graph.facebook.com`).
 //!
-//! - **Upload** creates a Reels media container with `upload_type=resumable` (the caption goes
-//!   in with it), then sends the rendered file to the container's `rupload` address in one
-//!   request. Re-sending to the same container replaces what was there, so an interrupted
-//!   upload simply starts again; nothing has to be hosted at a public URL. Containers expire
-//!   after 24 hours, so an older checkpoint opens a fresh container.
+//! The account is an Instagram professional account linked to a Facebook Page; calls use the
+//! Page's access token and the account's `instagram_business_account` id. (Uploading the file
+//! itself is only offered to apps with Facebook Login for Business: with Instagram Login,
+//! Instagram asks for a public `video_url` instead. [`InstagramAdapter::profile`] still reads
+//! an Instagram Login account, for the export-only fallback.)
+//!
+//! - **Upload** creates a Reels media container with `upload_type=resumable` (the caption and
+//!   `share_to_feed` go in with it), then sends the rendered file to the container's `rupload`
+//!   address. Before sending, the container's `video_status.uploading_phase.bytes_transferred`
+//!   says how much already arrived, so an interrupted upload continues from there instead of
+//!   from byte 0 (and one that fully arrived isn't sent again). Containers expire after 24
+//!   hours, so an older checkpoint opens a fresh container.
 //! - **Processing** polls the container's `status_code` until it is `FINISHED`.
 //! - **Publish** checks the account's 24-hour publishing limit, then calls `media_publish` and
 //!   reads the new reel's permalink.
@@ -12,9 +19,9 @@
 //!   exists, and it is found among the account's recent media by its caption; `FINISHED` means
 //!   nothing was published.
 //!
-//! Tokens come from an [`InstagramAuth`] source (the desktop keeps a long-lived token per
-//! account and renews it). They go in `Authorization` headers and are never logged; the
-//! account's Instagram user id is kept out of logs too.
+//! Tokens come from an [`InstagramAuth`] source (the desktop keeps the Page token per account).
+//! They go in `Authorization` headers and are never logged; the account's Instagram user id is
+//! kept out of logs too.
 
 use std::fmt;
 use std::sync::Arc;
@@ -40,7 +47,9 @@ use crate::contract::{
 };
 use crate::youtube::Now;
 
-pub const GRAPH_BASE: &str = "https://graph.instagram.com";
+pub const GRAPH_BASE: &str = "https://graph.facebook.com";
+/// The Instagram Login host, used only to identify an account connected that way.
+pub const INSTAGRAM_LOGIN_BASE: &str = "https://graph.instagram.com";
 pub const UPLOAD_BASE: &str = "https://rupload.facebook.com";
 /// Graph API version used for publishing calls. Meta supports each version for about two
 /// years; `SHORTS_INSTAGRAM_API_VERSION` overrides it.
@@ -54,14 +63,16 @@ const RECENT_MEDIA: u32 = 25;
 /// How much earlier than the upload a matching reel may be stamped (clock differences).
 const MATCH_SLACK: chrono::Duration = chrono::Duration::minutes(10);
 
-const CONNECT_NOTE: &str = "The sign-in lasts 60 days. The app renews it automatically while it \
-    runs; if it lapses, generate a new token in the Meta app dashboard and reconnect.";
+const CONNECT_NOTE: &str = "Connected through the Facebook Page with Facebook login. The Page's \
+    token doesn't expire; if Meta ends it (password change, removed app or permissions), \
+    reconnect with a new token.";
 
-/// A connected account's long-lived token and Instagram user id.
+/// A connected account's Page token and Instagram user id.
 #[derive(Clone, PartialEq, Eq)]
 pub struct IgSession {
+    /// The linked Facebook Page's access token.
     pub access_token: String,
-    /// The professional account's Instagram user id (`user_id` from `/me`).
+    /// The professional account's Instagram user id (`instagram_business_account.id`).
     pub user_id: String,
 }
 
@@ -81,7 +92,7 @@ pub trait InstagramAuth: Send + Sync {
     async fn invalidate(&self, account: AccountId, token: &str);
 }
 
-/// The signed-in professional account, from `GET /me`.
+/// An account connected with Instagram Login, from `GET graph.instagram.com/me`.
 #[derive(Clone, PartialEq, Eq, Deserialize)]
 pub struct IgProfile {
     #[serde(default)]
@@ -118,21 +129,78 @@ impl fmt::Debug for IgProfile {
     }
 }
 
-/// A renewed long-lived token.
+/// The Instagram professional account linked to a Page.
 #[derive(Clone, PartialEq, Eq, Deserialize)]
-pub struct RefreshedToken {
-    pub access_token: String,
-    /// Seconds.
+pub struct LinkedInstagram {
+    pub id: String,
     #[serde(default)]
-    pub expires_in: i64,
+    pub username: String,
 }
 
-impl fmt::Debug for RefreshedToken {
+/// A Facebook Page the user token can manage, from `GET /me/accounts`.
+#[derive(Clone, PartialEq, Eq, Deserialize)]
+pub struct FbPage {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    /// The Page's own token: it doesn't expire when it comes from a long-lived user token.
+    #[serde(default)]
+    pub access_token: String,
+    #[serde(default)]
+    pub instagram_business_account: Option<LinkedInstagram>,
+}
+
+impl fmt::Debug for FbPage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RefreshedToken")
-            .field("expires_in", &self.expires_in)
+        f.debug_struct("FbPage")
+            .field("name", &self.name)
+            .field(
+                "instagram",
+                &self
+                    .instagram_business_account
+                    .as_ref()
+                    .map(|i| &i.username),
+            )
             .finish_non_exhaustive()
     }
+}
+
+/// What Graph says about a pasted user token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TokenCheck {
+    /// Granted permissions.
+    pub scopes: Vec<String>,
+    /// `None` when the token never expires; also `None` with `expiry_known: false` when it
+    /// couldn't be read (`/debug_token` refused, permissions read from `/me/permissions`).
+    pub expires_at: Option<DateTime<Utc>>,
+    pub expiry_known: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DebugAnswer {
+    #[serde(default)]
+    data: DebugData,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct DebugData {
+    #[serde(default)]
+    is_valid: Option<bool>,
+    /// Unix seconds; 0 means never.
+    #[serde(default)]
+    expires_at: Option<i64>,
+    #[serde(default)]
+    scopes: Vec<String>,
+    #[serde(default)]
+    error: Option<GraphError>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct Permission {
+    #[serde(default)]
+    permission: String,
+    #[serde(default)]
+    status: String,
 }
 
 /// An open upload: the media container and where its bytes go.
@@ -144,6 +212,9 @@ pub struct InstagramUpload {
     /// container and records it on the attempt.
     pub upload_url: String,
     pub total: u64,
+    /// Bytes Instagram had confirmed when this checkpoint was written.
+    #[serde(default)]
+    pub offset: u64,
     /// SHA-256 of the caption, to recognise the reel among recent media.
     pub caption_digest: String,
     pub created_at: DateTime<Utc>,
@@ -154,6 +225,7 @@ impl fmt::Debug for InstagramUpload {
         f.debug_struct("InstagramUpload")
             .field("container_id", &self.container_id)
             .field("total", &self.total)
+            .field("offset", &self.offset)
             .field("created_at", &self.created_at)
             .finish_non_exhaustive()
     }
@@ -180,8 +252,10 @@ pub struct InstagramPost {
 
 #[derive(Debug, Clone)]
 pub struct InstagramConfig {
-    /// `https://graph.instagram.com`; tests point it at a fake.
+    /// `https://graph.facebook.com`; tests point it at a fake.
     pub graph_base: Url,
+    /// `https://graph.instagram.com`, for accounts connected with Instagram Login.
+    pub instagram_login_base: Url,
     /// Used when a container doesn't name its upload address.
     pub upload_base: Url,
     pub api_version: String,
@@ -196,6 +270,7 @@ impl Default for InstagramConfig {
     fn default() -> Self {
         Self {
             graph_base: Url::parse(GRAPH_BASE).expect("valid URL"),
+            instagram_login_base: Url::parse(INSTAGRAM_LOGIN_BASE).expect("valid URL"),
             upload_base: Url::parse(UPLOAD_BASE).expect("valid URL"),
             api_version: DEFAULT_API_VERSION.to_owned(),
             poll_every: Duration::from_secs(10),
@@ -212,7 +287,7 @@ struct ErrorBody {
     error: GraphError,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 struct GraphError {
     #[serde(default)]
     message: String,
@@ -229,6 +304,20 @@ struct GraphError {
 impl GraphError {
     fn is_auth(&self, status: StatusCode) -> bool {
         status == StatusCode::UNAUTHORIZED || matches!(self.code, 102 | 190 | 463 | 467)
+    }
+
+    /// Why Meta ended the sign-in, from code 190's subcode, with what to do.
+    fn auth_reason(&self) -> &'static str {
+        match self.error_subcode {
+            Some(458) => "the app was removed from your Facebook account's settings",
+            Some(459) => "Facebook wants you to log in at facebook.com to unlock the account",
+            Some(460) => "the Facebook password changed",
+            Some(463) => "the token expired (it wasn't extended to a long-lived one)",
+            Some(464) => "the Facebook account isn't confirmed yet",
+            Some(467) => "the token is no longer valid (you logged out or Meta reset it)",
+            Some(492) => "you are no longer an admin of the Facebook Page",
+            _ => "Meta no longer accepts the saved token",
+        }
     }
 
     fn text(&self, status: StatusCode) -> String {
@@ -261,6 +350,33 @@ struct ContainerStatus {
     status_code: String,
     #[serde(default)]
     status: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct UploadStatus {
+    #[serde(default)]
+    video_status: Option<VideoStatus>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct VideoStatus {
+    #[serde(default)]
+    uploading_phase: Option<UploadingPhase>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct UploadingPhase {
+    /// Meta sends it as a number; tolerate a string.
+    #[serde(default, deserialize_with = "number_or_string")]
+    bytes_transferred: Option<u64>,
+}
+
+fn number_or_string<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    Ok(match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Number(n) => n.as_u64(),
+        serde_json::Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    })
 }
 
 #[derive(Debug, Deserialize)]
@@ -360,14 +476,18 @@ fn classify(status: StatusCode, e: &GraphError) -> AdapterError {
     );
     if e.is_auth(status) {
         return AdapterError::Authentication {
-            message: format!("Instagram ended the sign-in ({text}); reconnect the account"),
+            message: format!(
+                "Instagram ended the sign-in: {} ({text}); reconnect with a new token",
+                e.auth_reason()
+            ),
         };
     }
     match (e.code, e.error_subcode) {
         (10 | 200..=299, _) => AdapterError::Authentication {
             message: format!(
-                "Instagram refused permission ({text}); reconnect the account and allow \
-                 publishing content"
+                "Instagram refused permission ({text}); generate a new token that includes \
+                 instagram_basic, instagram_content_publish, pages_show_list and \
+                 pages_read_engagement, and reconnect"
             ),
         },
         (_, Some(2_207_042)) => AdapterError::RateLimited {
@@ -395,6 +515,24 @@ fn classify(status: StatusCode, e: &GraphError) -> AdapterError {
             message: format!("Instagram: {text}"),
         },
     }
+}
+
+fn versioned(base: &Url, version: &str, path: &str) -> Url {
+    let mut url = base.clone();
+    let prefix = url.path().trim_end_matches('/').to_owned();
+    url.set_path(&format!("{prefix}/{version}{path}"));
+    url
+}
+
+async fn read_json<T: DeserializeOwned>(
+    sent: reqwest::Result<Response>,
+) -> Result<T, AdapterError> {
+    let response = sent.map_err(|e| transport(&e))?;
+    if !response.status().is_success() {
+        let (status, error) = read_error(response).await;
+        return Err(classify(status, &error));
+    }
+    response.json().await.map_err(|e| transport(&e))
 }
 
 pub struct InstagramAdapter {
@@ -428,10 +566,7 @@ impl InstagramAdapter {
     }
 
     fn graph(&self, path: &str) -> Url {
-        let mut url = self.config.graph_base.clone();
-        let prefix = url.path().trim_end_matches('/').to_owned();
-        url.set_path(&format!("{prefix}/{}{path}", self.config.api_version));
-        url
+        versioned(&self.config.graph_base, &self.config.api_version, path)
     }
 
     fn default_upload_url(&self, container: &str) -> Url {
@@ -473,44 +608,128 @@ impl InstagramAdapter {
         }
     }
 
-    /// Who a freshly pasted token belongs to. Used when connecting.
+    /// Who an Instagram Login token belongs to (`graph.instagram.com/me`). Used only to
+    /// connect an account in the export-only Instagram Login mode.
     pub async fn profile(&self, access_token: &str) -> Result<IgProfile, AdapterError> {
-        let response = self
-            .http
-            .get(self.graph("/me"))
-            .query(&[("fields", "user_id,username,account_type")])
-            .bearer_auth(access_token)
-            .send()
-            .await
-            .map_err(|e| transport(&e))?;
-        if !response.status().is_success() {
-            let (status, error) = read_error(response).await;
-            return Err(classify(status, &error));
-        }
-        response.json().await.map_err(|e| transport(&e))
+        let url = versioned(
+            &self.config.instagram_login_base,
+            &self.config.api_version,
+            "/me",
+        );
+        read_json(
+            self.http
+                .get(url)
+                .query(&[("fields", "user_id,username,account_type")])
+                .bearer_auth(access_token)
+                .send()
+                .await,
+        )
+        .await
     }
 
-    /// Renews a long-lived token (it must be at least 24 hours old) for another 60 days.
-    pub async fn refresh_token(&self, access_token: &str) -> Result<RefreshedToken, AdapterError> {
-        let mut url = self.config.graph_base.clone();
-        let prefix = url.path().trim_end_matches('/').to_owned();
-        url.set_path(&format!("{prefix}/refresh_access_token"));
-        // Instagram takes this token only as a query parameter; the URL is never logged.
-        let response = self
-            .http
-            .get(url)
-            .query(&[
-                ("grant_type", "ig_refresh_token"),
-                ("access_token", access_token),
-            ])
-            .send()
-            .await
-            .map_err(|e| transport(&e))?;
-        if !response.status().is_success() {
-            let (status, error) = read_error(response).await;
-            return Err(classify(status, &error));
+    /// The Pages a pasted user token manages, with their tokens and linked Instagram accounts.
+    pub async fn pages(&self, user_token: &str) -> Result<Vec<FbPage>, AdapterError> {
+        let page: Page<FbPage> = read_json(
+            self.http
+                .get(self.graph("/me/accounts"))
+                .query(&[
+                    (
+                        "fields",
+                        "name,access_token,instagram_business_account{id,username}",
+                    ),
+                    ("limit", "100"),
+                ])
+                .bearer_auth(user_token)
+                .send()
+                .await,
+        )
+        .await?;
+        Ok(page.data)
+    }
+
+    /// The pasted token's permissions and expiry. `/debug_token` accepts the token itself as
+    /// the caller when its user is a developer of the app (the owner is its admin), so no app
+    /// secret is needed; if Meta refuses that, the permissions come from `/me/permissions`
+    /// and the expiry is unknown.
+    pub async fn check_token(&self, user_token: &str) -> Result<TokenCheck, AdapterError> {
+        let debug: Result<DebugAnswer, _> = read_json(
+            self.http
+                .get(self.graph("/debug_token"))
+                .query(&[("input_token", user_token)])
+                .bearer_auth(user_token)
+                .send()
+                .await,
+        )
+        .await;
+        match debug {
+            Ok(DebugAnswer { data }) if data.error.is_none() && data.is_valid != Some(false) => {
+                let expires_at = data
+                    .expires_at
+                    .filter(|&t| t > 0)
+                    .and_then(|t| DateTime::from_timestamp(t, 0));
+                return Ok(TokenCheck {
+                    scopes: data.scopes,
+                    expires_at,
+                    expiry_known: true,
+                });
+            }
+            Ok(DebugAnswer { data }) => {
+                let error = data.error.unwrap_or_default();
+                return Err(AdapterError::Authentication {
+                    message: format!("Meta says the token isn't valid: {}", error.auth_reason()),
+                });
+            }
+            Err(e @ AdapterError::Authentication { .. }) => {
+                // An invalid token fails here too; /me/permissions tells which it was.
+                debug!(error = %e, "debug_token refused; reading /me/permissions");
+            }
+            Err(e) => debug!(error = %e, "debug_token unavailable; reading /me/permissions"),
         }
-        response.json().await.map_err(|e| transport(&e))
+        let granted: Page<Permission> = read_json(
+            self.http
+                .get(self.graph("/me/permissions"))
+                .bearer_auth(user_token)
+                .send()
+                .await,
+        )
+        .await?;
+        Ok(TokenCheck {
+            scopes: granted
+                .data
+                .into_iter()
+                .filter(|p| p.status == "granted")
+                .map(|p| p.permission)
+                .collect(),
+            expires_at: None,
+            expiry_known: false,
+        })
+    }
+
+    /// How many bytes of the container's file Instagram already has, from
+    /// `video_status.uploading_phase.bytes_transferred`. Unknown (e.g. the field isn't
+    /// offered) counts as none, so the upload starts from the beginning.
+    async fn bytes_received(&self, cp: &InstagramUpload) -> Result<u64, AdapterError> {
+        let answer: Result<UploadStatus, _> = self
+            .call(cp.account_id, |session| {
+                self.http
+                    .get(self.graph(&format!("/{}", cp.container_id)))
+                    .query(&[("fields", "video_status")])
+                    .bearer_auth(&session.access_token)
+            })
+            .await;
+        match answer {
+            Ok(status) => Ok(status
+                .video_status
+                .and_then(|v| v.uploading_phase)
+                .and_then(|u| u.bytes_transferred)
+                .unwrap_or(0)
+                .min(cp.total)),
+            Err(e @ AdapterError::Authentication { .. }) => Err(e),
+            Err(e) => {
+                warn!(error = %e, "could not read how much of the upload arrived; sending it all");
+                Ok(0)
+            }
+        }
     }
 
     async fn create_container(&self, s: &Submission<'_>) -> Result<InstagramUpload, AdapterError> {
@@ -521,6 +740,11 @@ impl InstagramAdapter {
         }
         let content = s.publication.content();
         let caption = full_caption(&content.caption, &content.hashtags);
+        let share_to_feed = if content.options.share_to_feed.unwrap_or(true) {
+            "true"
+        } else {
+            "false"
+        };
         let created: Created = self
             .call(s.account.id, |session| {
                 self.http
@@ -530,7 +754,7 @@ impl InstagramAdapter {
                         ("media_type", "REELS"),
                         ("upload_type", "resumable"),
                         ("caption", caption.as_str()),
-                        ("share_to_feed", "true"),
+                        ("share_to_feed", share_to_feed),
                     ])
             })
             .await?;
@@ -545,6 +769,7 @@ impl InstagramAdapter {
             container_id: created.id,
             upload_url: upload_url.into(),
             total: s.size_bytes,
+            offset: 0,
             caption_digest: caption_digest(&caption),
             created_at: (self.now)(),
         })
@@ -761,27 +986,44 @@ impl Adapter for InstagramAdapter {
                 message: "the rendered video changed during the upload; publish it again".into(),
             });
         }
+        // Ask where an interrupted upload stopped; a fresh container has nothing yet.
+        let offset = self.bytes_received(&cp).await?;
+        let complete = |cp: InstagramUpload, now| UploadProgress::Complete {
+            media: InstagramMedia {
+                id: cp.container_id,
+                account_id: cp.account_id,
+                caption_digest: cp.caption_digest,
+                uploaded_at: now,
+            },
+        };
+        if offset >= cp.total {
+            debug!("the whole file had already arrived");
+            return Ok(complete(cp, (self.now)()));
+        }
+        if offset > 0 {
+            debug!(offset, total = cp.total, "resuming the Instagram upload");
+        }
+        let start = usize::try_from(offset).unwrap_or(0);
         let session = self.auth.session(cp.account_id).await?;
         let sent = self
             .http
             .post(cp.upload_url.as_str())
             .header(AUTHORIZATION, format!("OAuth {}", session.access_token))
-            .header("offset", "0")
+            .header("offset", offset.to_string())
             .header("file_size", cp.total.to_string())
-            .timeout(self.upload_timeout(cp.total))
-            .body(bytes)
+            .timeout(self.upload_timeout(cp.total - offset))
+            .body(bytes[start..].to_vec())
             .send()
             .await;
         let response = match sent {
             Ok(r) => r,
-            // Sending to the same container again replaces the bytes, so a broken upload is
-            // simply repeated.
+            // The next step asks Instagram how much arrived and continues from there.
             Err(e) => {
                 return Err(AdapterError::Transient {
                     message: match transport(&e) {
                         AdapterError::Transient { message, .. }
                         | AdapterError::ResponseLost { message } => {
-                            format!("{message}; the upload starts again")
+                            format!("{message}; the upload continues where it stopped")
                         }
                         other => other.to_string(),
                     },
@@ -794,28 +1036,22 @@ impl Adapter for InstagramAdapter {
             if answer.success == Some(false) {
                 return Err(AdapterError::Transient {
                     message: format!(
-                        "Instagram did not accept the upload ({}); it starts again",
+                        "Instagram did not accept the upload ({}); it is sent again",
                         answer.message.unwrap_or_else(|| "no reason given".into())
                     ),
                     retry_after: None,
                 });
             }
-            return Ok(UploadProgress::Complete {
-                media: InstagramMedia {
-                    id: cp.container_id,
-                    account_id: cp.account_id,
-                    caption_digest: cp.caption_digest,
-                    uploaded_at: (self.now)(),
-                },
-            });
+            return Ok(complete(cp, (self.now)()));
         }
         let (status, error) = read_error(response).await;
         if error.is_auth(status) {
             self.auth
                 .invalidate(cp.account_id, &session.access_token)
                 .await;
+            // The next step reads the token again; a revoked one then asks for a reconnect.
             return Err(AdapterError::Transient {
-                message: "Instagram asked for a fresh sign-in token".into(),
+                message: "Instagram refused the upload's token; checking the sign-in".into(),
                 retry_after: None,
             });
         }
@@ -976,10 +1212,58 @@ mod tests {
             container_id: "c1".into(),
             upload_url: "https://rupload.example/ig-api-upload/v24.0/c1".into(),
             total: 1,
+            offset: 0,
             caption_digest: String::new(),
             created_at: Utc::now(),
         };
         assert!(!format!("{cp:?}").contains("rupload"));
+    }
+
+    #[test]
+    fn page_token_errors_name_the_cause() {
+        let e = |code, subcode| GraphError {
+            message: "m".into(),
+            code,
+            error_subcode: subcode,
+            ..Default::default()
+        };
+        for (subcode, words) in [
+            (Some(460), "password"),
+            (Some(463), "long-lived"),
+            (Some(458), "removed"),
+            (Some(492), "admin of the Facebook Page"),
+            (None, "no longer accepts"),
+        ] {
+            let AdapterError::Authentication { message } =
+                classify(StatusCode::BAD_REQUEST, &e(190, subcode))
+            else {
+                panic!("190 asks for a reconnect");
+            };
+            assert!(message.contains(words), "{message}");
+        }
+        for code in [10, 200, 299] {
+            let AdapterError::Authentication { message } =
+                classify(StatusCode::FORBIDDEN, &e(code, None))
+            else {
+                panic!("{code} asks for a reconnect");
+            };
+            assert!(message.contains("instagram_content_publish"), "{message}");
+        }
+    }
+
+    #[test]
+    fn page_debug_output_hides_the_token() {
+        let p = FbPage {
+            id: "1".into(),
+            name: "Bakery".into(),
+            access_token: "EAAGpage".into(),
+            instagram_business_account: Some(LinkedInstagram {
+                id: "1784".into(),
+                username: "bakery".into(),
+            }),
+        };
+        let shown = format!("{p:?}");
+        assert!(shown.contains("bakery") && !shown.contains("EAAG") && !shown.contains("1784"));
     }
 
     #[test]
