@@ -21,6 +21,99 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # Media tests skip without FFmpeg; install it on Linux so they run there.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: cargo fmt --all --check
+      - run: cargo fmt --all --check --manifest-path app/src-tauri/Cargo.toml
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+
+  # The cloud runner's store, API and race tests need PostgreSQL; elsewhere they skip.
+  runner-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: shorts_runner_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/shorts_runner_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p shorts-runner -p shorts-cloud
+      - run: cargo test -p shorts-desktop --test cloud
+      - name: Build the runner image
+        run: docker build -f crates/runner/Dockerfile -t shorts-runner:ci .
+      - name: Check the deploy examples
+        working-directory: crates/runner/deploy
+        run: |
+          RUNNER_DOMAIN=runner.example.com POSTGRES_PASSWORD=x SHORTS_RUNNER_MASTER_KEY=x \
+            docker compose -f compose.yaml config --quiet
+          docker run --rm -e RUNNER_DOMAIN=runner.example.com -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker run --rm shorts-runner:ci generate-key
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: app/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm build
+
+  tauri-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri -> target
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: app/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+      # The Tauri build script embeds the built frontend, so it has to exist.
+      - run: pnpm install --frozen-lockfile
+        working-directory: app
+      - run: pnpm build
+        working-directory: app
+      - run: cargo clippy --manifest-path app/src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+      # The release workflow's script and config aren't exercised until a release; catch typos here.
+      - name: Check release script and config
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/fetch-ffmpeg.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+          Get-Content app/src-tauri/tauri.release.conf.json -Raw | ConvertFrom-Json | Out-Null

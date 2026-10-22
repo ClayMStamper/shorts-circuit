@@ -12,3 +12,19 @@ publish = false
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shorts-domain.workspace = true
+shorts-store.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,41 @@
+[package]
+name = "shorts-desktop"
+description = "Desktop application services behind the Tauri shell: import, library, variants, review, scheduling and job handlers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+notify.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shorts-adapters.workspace = true
+shorts-cloud.workspace = true
+shorts-domain.workspace = true
+shorts-media.workspace = true
+shorts-publish.workspace = true
+shorts-scheduler.workspace = true
+shorts-store.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+shorts-runner.workspace = true
+sqlx = { workspace = true, features = ["postgres"] }
+tempfile.workspace = true
+uuid.workspace = true
+wiremock.workspace = true
