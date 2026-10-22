@@ -90,6 +90,9 @@
       case "rulesFailed":
         toast(`A workflow couldn't handle a video: ${event.message}`, "bad");
         break;
+      case "originalAttached":
+        toast(`Got the original for “${event.title}”. Its workflows take it from here.`, "good");
+        break;
       case "matchSuggested":
         toast("A new file may be the original of a TikTok post; confirm it in Settings → Advanced → Library.", "info");
         break;

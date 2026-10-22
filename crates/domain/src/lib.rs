@@ -50,6 +50,6 @@ pub use recipe::{
     RenderRecipe, SubtitleMode, SubtitleTrack, TrimRange,
 };
 pub use schedule::{Schedule, TimeZoneName};
-pub use source::{MatchScore, TikTokPost, match_score, post_title};
+pub use source::{MatchScore, TikTokPost, match_score, pick_post_for_download, post_title};
 pub use variant::{RenderedOutput, Variant};
 pub use workflow::{PostingMode, Workflow, WorkflowError, WorkflowSettings, WorkflowStatus};

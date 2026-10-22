@@ -168,7 +168,8 @@ If you think the master key leaked, rotate it and also reconnect each account on
   refresh and retire the old one. The runner stores the new one and the desktop fetches it on
   its next sync. If both refresh in the same moment, one may be refused and ask you to
   reconnect.
-- **Instagram tokens** are renewed by the runner too while it has publications for the
-  account; the desktop picks up the renewed token on its next sync.
+- **Instagram** accounts publish with their Facebook Page's token, which doesn't expire, so
+  the runner renews nothing. An account still connected with Instagram login waits at *Needs
+  authentication* until it is reconnected with Facebook login on the desktop.
 - One runner process per database. Two would not double-publish (claims are locked), but
   there is no benefit.

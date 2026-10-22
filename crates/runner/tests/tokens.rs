@@ -9,10 +9,11 @@ use shorts_adapters::linkedin::LinkedInAuth;
 use shorts_adapters::snapchat::SnapAuth;
 use shorts_adapters::youtube::AccessTokens;
 use shorts_cloud::{AccountPut, CloudCredential, CredentialSource, Secret};
+use shorts_domain::instagram::InstagramLogin;
 use shorts_domain::{AccountId, Platform};
 use shorts_runner::RunnerSetup;
 use support::{Fixture, t0, youtube_credential};
-use wiremock::matchers::{body_string_contains, method, path, query_param};
+use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 async fn fixture(server: &MockServer) -> Option<Fixture> {
@@ -144,61 +145,41 @@ async fn snap_refresh_tokens_rotate_and_are_kept() {
 }
 
 #[tokio::test]
-async fn instagram_tokens_are_renewed_when_under_20_days_are_left() {
+async fn instagram_page_tokens_are_used_as_stored_and_old_logins_ask_for_a_reconnect() {
     let server = MockServer::start().await;
     let Some(f) = fixture(&server).await else {
         return;
     };
-    let fresh = add_account(
+    let page = add_account(
         &f,
         Platform::InstagramReels,
         CloudCredential::InstagramReels {
-            access_token: Secret::new("fake-ig-fresh"),
+            access_token: Secret::new("fake-page-token"),
             user_id: "fake-ig-user".into(),
-            issued_at: t0() - Duration::days(1),
-            expires_at: t0() + Duration::days(59),
+            login: InstagramLogin::FacebookLogin,
+            expires_at: None,
         },
     )
     .await;
-    let due = add_account(
+    let old = add_account(
         &f,
         Platform::InstagramReels,
         CloudCredential::InstagramReels {
-            access_token: Secret::new("fake-ig-old"),
+            access_token: Secret::new("fake-igaa-token"),
             user_id: "fake-ig-user-2".into(),
-            issued_at: t0() - Duration::days(45),
-            expires_at: t0() + Duration::days(15),
+            login: InstagramLogin::InstagramLogin,
+            expires_at: Some(t0() + Duration::days(15)),
         },
     )
     .await;
-    Mock::given(method("GET"))
-        .and(path("/ig/refresh_access_token"))
-        .and(query_param("access_token", "fake-ig-old"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "access_token": "fake-ig-renewed",
-            "token_type": "bearer",
-            "expires_in": 5_184_000,
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
     let tokens = f.runner.tokens().as_ref();
-    let s = InstagramAuth::session(tokens, fresh).await.unwrap();
-    assert_eq!(s.access_token, "fake-ig-fresh");
-    let s = InstagramAuth::session(tokens, due).await.unwrap();
-    assert_eq!(s.access_token, "fake-ig-renewed");
-    let stored = f.store().credential(due).await.unwrap().unwrap();
-    let CloudCredential::InstagramReels { expires_at, .. } = stored.credential else {
-        panic!()
-    };
-    assert_eq!(expires_at, t0() + Duration::days(60));
-    // Renewed now, so it isn't renewed again.
-    assert_eq!(
-        InstagramAuth::session(tokens, due)
-            .await
-            .unwrap()
-            .access_token,
-        "fake-ig-renewed"
+    let s = InstagramAuth::session(tokens, page).await.unwrap();
+    assert_eq!(s.access_token, "fake-page-token");
+    assert_eq!(s.user_id, "fake-ig-user");
+    let err = InstagramAuth::session(tokens, old).await.unwrap_err();
+    assert!(
+        matches!(&err, AdapterError::Authentication { message } if message.contains("Facebook login")),
+        "{err:?}"
     );
     f.finish().await;
 }

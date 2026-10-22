@@ -356,6 +356,8 @@ export interface Preferences {
   watchCollection: string | null;
   /** When the watch folder was last listed. */
   watchCheckedAt: string | null;
+  /** Also watched, only for videos downloaded from pending TikTok posts. Null = off. */
+  downloadsFolder: string | null;
 }
 
 export interface PreferencesUpdate {
@@ -365,6 +367,7 @@ export interface PreferencesUpdate {
   exportDir?: string | null;
   postingSlots?: PostingSlot[];
   watchCollection?: string | null;
+  downloadsFolder?: string | null;
 }
 
 export type ScheduleInput =
@@ -445,7 +448,15 @@ export type AppEvent =
   | { type: "snapchatChanged" }
   | { type: "cloudChanged" }
   | { type: "watchFolderChecked" }
-  | { type: "matchSuggested"; assetId: string | null };
+  | { type: "matchSuggested"; assetId: string | null }
+  | { type: "originalAttached"; assetId: string; title: string };
+
+/** What "Get original" did. */
+export interface GetOriginal {
+  downloadsFolder: string | null;
+  /** Picking up downloads was off and has just been turned on. */
+  enabledNow: boolean;
+}
 
 export interface CollectionRef {
   id: string;
@@ -484,6 +495,12 @@ export interface RuleItemView {
   caption: string;
   durationMs: number | null;
   sourcePostedAt: string | null;
+  /** The original post (e.g. its TikTok link), when known. */
+  sourceUrl: string | null;
+  /** "Get original" was clicked: a matching download is expected until then. */
+  expectingOriginalUntil: string | null;
+  /** Why a download wasn't taken for this post, e.g. a different length. */
+  downloadNote: string | null;
   /** In the collection, but the original file hasn't arrived yet. */
   waitingForMedia: boolean;
   /** Why nothing has been created yet, e.g. waiting for its TikTok caption. */
@@ -656,22 +673,43 @@ export interface YouTubeStatus {
   quota: QuotaReport;
 }
 
+/** How an Instagram account is connected. Only Facebook login uploads files. */
+export type InstagramLogin = "facebook_login" | "instagram_login";
+
 export interface InstagramAccount {
   accountId: string;
   displayName: string;
   connected: boolean;
   needsReconnect: boolean;
+  login: InstagramLogin | null;
+  /** Connected with Facebook login and able to publish. */
+  canPublish: boolean;
+  pageName: string | null;
+  username: string | null;
   lastError: string | null;
   notes: string[];
   connectedAt: string | null;
-  tokenExpiresAt: string | null;
-  renewedAt: string | null;
 }
 
 export interface InstagramStatus {
   accounts: InstagramAccount[];
-  /** What to do first, while no account is connected. */
+  /** What to do first, while no account publishes. */
   nextStep: string | null;
+}
+
+/** A Facebook Page a pasted token manages. */
+export interface InstagramPageChoice {
+  pageId: string;
+  pageName: string;
+  /** The linked Instagram professional account, if any. */
+  instagramUsername: string | null;
+}
+
+export interface InstagramPages {
+  /** Pages with a linked Instagram account first. */
+  pages: InstagramPageChoice[];
+  /** Said when the token's lifetime couldn't be read. */
+  warning: string | null;
 }
 
 export interface LinkedInPage {

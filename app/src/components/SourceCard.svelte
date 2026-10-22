@@ -42,6 +42,26 @@
     if (dir) await setFolder(dir);
   }
 
+  async function setDownloads(folder: string | null) {
+    try {
+      prefs = await api.updatePreferences({ downloadsFolder: folder });
+      toast(folder ? "Picking up TikTok downloads" : "Stopped watching downloads", "good");
+    } catch (e) {
+      errorToast(e);
+    }
+  }
+
+  async function toggleDownloads(on: boolean) {
+    if (!on) return setDownloads(null);
+    const dir = (await api.defaultDownloadsFolder().catch(() => null)) ?? (await pickFolder());
+    if (dir) await setDownloads(dir);
+  }
+
+  async function chooseDownloads() {
+    const dir = await pickFolder();
+    if (dir) await setDownloads(dir);
+  }
+
   async function checkNow() {
     try {
       prefs = await api.checkWatchFolder();
@@ -90,6 +110,24 @@
         <input id="watch-path" placeholder="or paste a folder path" bind:value={typed} style="flex: 1" />
         <button type="submit">Use this folder</button>
       </form>
+    {/if}
+  </div>
+  <div class="setting" data-testid="downloads-setting">
+    <label class="check">
+      <input
+        type="checkbox"
+        checked={!!prefs?.downloadsFolder}
+        onchange={(e) => toggleDownloads(e.currentTarget.checked)}
+      />
+      Also pick up originals I download from TikTok
+    </label>
+    <p class="muted">
+      On a video that's waiting for its original, click <strong>Get original ↗</strong>, then right-click the video on
+      TikTok → <strong>Download video</strong>. The app takes it from your downloads folder and publishes it with the
+      post's caption. Other files there are left alone.
+    </p>
+    {#if prefs?.downloadsFolder}
+      <p><code>{prefs.downloadsFolder}</code> <button class="link" onclick={chooseDownloads}>Change…</button></p>
     {/if}
   </div>
   <details>

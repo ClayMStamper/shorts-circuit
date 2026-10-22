@@ -44,7 +44,7 @@ application lacks API access.
 |---|---|
 | TikTok (source) | The Display API provides metadata, share links, and embeds, but no source-video download field. Import original files or authorized exports; a saved TikTok URL can remain a library item awaiting media. oEmbed covers link metadata without auth. The optional new-post detector (below) uses only `user.info.basic` and `video.list`. |
 | YouTube Shorts | Upload through the YouTube Data API using resumable uploads. Validate the asset against Shorts format rules; uploading a video and being classified as a Short are distinct concerns. Implemented first (Increment 3, below). |
-| Instagram Reels | Professional accounts publish through a media-container workflow (Instagram Login, no linked Facebook Page needed). Model container creation, processing, and publication as separate steps. |
+| Instagram Reels | Professional accounts linked to a Facebook Page publish through a media-container workflow (Instagram API with Facebook Login, which is what allows uploading the file itself). Model container creation, processing, and publication as separate steps. |
 | Snapchat Spotlight | The Public Profile API supports Spotlight publication but requires application allowlisting. Verify access before enabling automation; otherwise offer export and manual handoff. Implemented as the fourth connector (below); unverified against a real account. |
 | LinkedIn | Upload media through the Videos API, then reference it in a Posts API request. Check member vs organization permissions. Feed placement is outside the app's control. |
 
@@ -215,6 +215,19 @@ TikTok is used at most to notice that a post exists:
   files ever appears, a fetcher would attach the file to the awaiting item through the normal
   import path (`import_file` with `into`), leaving matching and rules unchanged.
 
+#### Originals downloaded from TikTok
+
+- The downloads folder can be watched in a second mode (`WatchKind::Downloads`): only files
+  modified after watching starts are considered, and a video is imported only when
+  `pick_post_for_download` attributes it to a pending TikTok post. It is then attached to that
+  post's waiting item (`import_file(path, into)`), keeping its caption, link and collections,
+  and the post is marked matched. Anything else is left in place, unimported.
+- "Get original" (`App::expect_original`) opens the post and remembers it for 30 minutes; a
+  requested post whose duration fits wins, even if it is older than the 72-hour window that
+  unrequested downloads (and the watch folder's matching) use. Without a request, the file must
+  fit exactly one pending post.
+- The owner clicks TikTok's own "Download video"; the app never automates TikTok's site.
+
 ### Media pipeline
 
 - Inspect originals with FFprobe.
@@ -353,34 +366,78 @@ publish are separate operations so interrupted work resumes at the correct step.
 
 ### Instagram Reels connector (Increment 3, second slice)
 
-- **Sign-in.** The owner pastes a long-lived token generated in their Meta app's dashboard
-  (Instagram → API setup with Instagram login → Generate token) for a professional account
-  added to the app. No redirect address, hosting or app secret is needed. `GET /me` identifies
-  the account (`user_id`, `username`, `account_type`); personal accounts are refused with the
-  next step. The token and user id live in the OS credential store (`instagram:<account id>`).
-- **Renewal.** Long-lived tokens last 60 days and can be renewed with themselves once a day
-  old (`GET /refresh_access_token?grant_type=ig_refresh_token`). The connector renews a token
-  when it has under 20 days left, on use and every 6 hours while the app runs. An expired or
-  refused token moves publications to `NeedsAuthentication`; pasting a new token for the same
-  account reconnects it and resumes them. (A browser OAuth flow would need an HTTPS redirect
-  and the app secret, i.e. the broker; it can be added when the app is shared.)
-- **Upload.** `POST /{ig-user-id}/media` with `media_type=REELS`, `upload_type=resumable`,
-  the caption and `share_to_feed=true` creates a container; the file goes to the container's
-  `rupload.facebook.com/ig-api-upload/<version>/<container>` address in one request
-  (`Authorization: OAuth`, `offset: 0`, `file_size`). Re-sending replaces the bytes, so an
-  interrupted upload simply repeats; a checkpoint older than 23 hours opens a new container
-  (containers expire after 24). No public video URL or staging storage is needed.
+Switched to Facebook Login on 21 October 2026, after the first real test: with Instagram Login
+(`graph.instagram.com`) Instagram refused the resumable container ("The parameter video_url is
+required"). Meta's resumable-upload docs offer uploading the file itself only to apps with
+Facebook Login for Business; the alternative, a public `video_url`, would need hosting.
+
+- **Sign-in.** The Instagram professional account is linked to a Facebook Page; the owner's Meta
+  app uses "API setup with Facebook login". The owner generates a user token for that app in
+  Graph API Explorer (`instagram_basic`, `instagram_content_publish`, `pages_show_list`,
+  `pages_read_engagement`, `business_management`), extends it to a long-lived token in the
+  Access Token Debugger and pastes it. No redirect address, hosting or app secret is needed;
+  the app stays in Development mode with the owner as its admin, so no App Review.
+- **Checks, one next action each.** `GET /debug_token?input_token=<token>` with the token
+  itself as caller (allowed when its user is a developer of the app) gives the granted scopes
+  and expiry; if Meta refuses that, `GET /me/permissions` gives the scopes and the owner is told
+  how to read the expiry in the Access Token Debugger. Missing scopes are named (the four
+  above; `business_management` is only mentioned when no Page is found, since only Pages in a
+  business portfolio need it). A token with under a day left is short-lived: extend it. An
+  `IGAA…` token is an Instagram Login token. `GET /me/accounts?fields=name,access_token,
+  instagram_business_account{id,username}` lists the Pages: none → choose the Page when
+  generating the token; none with `instagram_business_account` → link it in the Page's
+  settings → Linked accounts. One linked Page is picked automatically; with several the owner
+  picks.
+- **Stored.** The chosen Page's access token (it doesn't expire when derived from a long-lived
+  user token, so there is no renewal), the `instagram_business_account` id, the username and
+  the Page's name live in the OS credential store (`instagram:<account id>`, with
+  `login: facebook_login`); the user token is not kept. A token Meta ends anyway (190) moves
+  publications to `NeedsAuthentication` with Reconnect; pasting a new token (matched to the
+  same account by Instagram id or username) resumes them.
+- **Instagram Login fallback.** Still selectable as the connection type (`GET
+  graph.instagram.com/me` identifies the account), but such accounts can't upload files, so
+  their capability record is `ManualOnly` with `Reconnect` ("reconnect with Facebook login")
+  and publications use export packages. Accounts connected that way before the switch (grants
+  without `login`) get that record on start; their workflows and Auto Publish grants stay and
+  publish again once reconnected. No schema migration: grants and the per-account status live
+  in the credential store and settings JSON, read with defaults.
+- **Upload.** `POST graph.facebook.com/<version>/{ig-user-id}/media` with
+  `media_type=REELS`, `upload_type=resumable`, the caption and `share_to_feed` (Bearer Page
+  token) creates a container; the file goes to
+  `rupload.facebook.com/ig-api-upload/<version>/<container>` (`Authorization: OAuth <token>`,
+  `offset`, `file_size`). Before each send the adapter reads the container's
+  `video_status.uploading_phase.bytes_transferred` and sends from that offset, so an
+  interrupted upload continues and one that fully arrived isn't sent again; if the field can't
+  be read the whole file is sent from 0 (re-sending replaces the bytes). A checkpoint older than
+  23 hours opens a new container (containers expire after 24).
 - **Processing and publish.** The container's `status_code` is polled until `FINISHED`
   (`ERROR`/`EXPIRED` fail the attempt). Publish checks `content_publishing_limit` (100 API
   posts per 24 hours), calls `media_publish`, then reads the reel's permalink. Reconcile reads
   the container: `PUBLISHED` → the reel is found among the account's recent media by caption
-  digest; `FINISHED` → nothing was published, so publishing again is safe.
-- **Errors.** Graph error codes 190/102/463/467 ask for a reconnect, 10/200–299 for a
-  reconnect with the publishing permission, 4/17/32/613/80002 (and 429) pause 15 minutes, and
-  subcode 2207042 (posting limit) pauses an hour. Transient or 5xx errors retry.
+  digest; `FINISHED` → nothing was published, so publishing again is safe. All on
+  `graph.facebook.com`.
+- **Errors.** Graph codes 190/102/463/467 ask for a reconnect, with code 190's subcode named
+  (458 app removed, 459 checkpoint, 460 password changed, 463 expired, 464 unconfirmed user,
+  467 invalidated, 492 no longer a Page admin); 10/200–299 ask for a reconnect with the
+  permissions named; 4/17/32/613/80002 (and 429) pause 15 minutes; subcode 2207042 (posting
+  limit) pauses an hour. Transient or 5xx errors retry; other 4xx answers stop at
+  `NeedsUserAction` (Retry there continues once fixed).
+- **Cloud runner.** The credential carries `login`; the runner uses Page tokens as they are and
+  asks for a reconnect on the desktop for Instagram Login credentials. It no longer renews
+  Instagram tokens.
+- **Verified vs assumed** (no network access to Meta from the build; checked against the docs
+  as quoted by the owner and Meta's public pages): container creation, the rupload address and
+  its headers, Facebook Login being required for resumable uploads, `/me/accounts` fields and
+  Page tokens not expiring are from Meta's docs. Assumed until the smoke test: the exact shape
+  of `video_status.uploading_phase.bytes_transferred` on an Instagram container (only seen in a
+  forum report), `/debug_token` accepting the user token as caller for an app admin, Bearer
+  headers on `graph.facebook.com`, and the Instagram Login `user_id` equalling the
+  `instagram_business_account` id (the username is matched as well).
 - **Limits** (`shorts_domain::instagram`): MP4/MOV, 3 s to 15 min, 300 MB, any aspect ratio
   between 0.01:1 and 10:1, caption ≤ 2,200 characters, ≤ 30 hashtags and ≤ 20 @mentions. The
   Graph API version defaults to `v24.0` (`SHORTS_INSTAGRAM_API_VERSION` overrides it).
+- **Later.** The same Page connection could publish Facebook Reels (`/{page-id}/video_reels`);
+  not in scope.
 
 ### LinkedIn Company Page connector (Increment 3, third slice)
 

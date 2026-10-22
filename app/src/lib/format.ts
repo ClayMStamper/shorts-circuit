@@ -87,7 +87,7 @@ const ACTION_LABELS: Record<Action, string> = {
   publishNow: "Post now",
   cancel: "Cancel",
   retry: "Retry",
-  resolveUserAction: "Resolved, continue",
+  resolveUserAction: "Retry",
   confirmPosted: "Mark as posted",
   resolveOutcome: "Record outcome",
   exportPackage: "Export package",

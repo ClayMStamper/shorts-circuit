@@ -27,7 +27,6 @@ use crate::tokens::RunnerTokens;
 /// swept before its publication follows.
 const UPLOAD_RETENTION: chrono::Duration = chrono::Duration::hours(6);
 const HOUSEKEEPING_EVERY: Duration = Duration::from_secs(10 * 60);
-const INSTAGRAM_RENEW_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Where the platform APIs are. Tests point them at local fakes.
 #[derive(Debug, Clone)]
@@ -146,14 +145,12 @@ impl Runner {
             }),
             now.clone(),
         )));
-        let instagram = Arc::new(InstagramAdapter::new(
+        registry.register(Arc::new(InstagramAdapter::new(
             http.clone(),
             setup.instagram.clone(),
             tokens.clone(),
             now.clone(),
-        ));
-        tokens.set_instagram(instagram.clone());
-        registry.register(instagram);
+        )));
         registry.register(Arc::new(LinkedInAdapter::new(
             http.clone(),
             setup.linkedin.clone(),
@@ -248,18 +245,10 @@ impl Runner {
     }
 
     async fn housekeeping(self: Arc<Self>, shutdown: CancellationToken) {
-        let mut since_renewal = INSTAGRAM_RENEW_EVERY;
         loop {
             self.sweep_media().await;
-            if since_renewal >= INSTAGRAM_RENEW_EVERY {
-                since_renewal = Duration::ZERO;
-                match self.store.instagram_accounts_in_use().await {
-                    Ok(accounts) => self.tokens.renew_instagram(&accounts).await,
-                    Err(e) => warn!(error = %e, "could not list Instagram accounts"),
-                }
-            }
             tokio::select! {
-                () = tokio::time::sleep(HOUSEKEEPING_EVERY) => since_renewal += HOUSEKEEPING_EVERY,
+                () = tokio::time::sleep(HOUSEKEEPING_EVERY) => {}
                 () = shutdown.cancelled() => return,
             }
         }
