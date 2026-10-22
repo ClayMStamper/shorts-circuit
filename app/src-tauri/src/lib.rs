@@ -281,6 +281,7 @@ pub fn run() {
             commands::check_watch_folder,
             commands::get_original,
             commands::cancel_get_original,
+            commands::send_to_workflows,
             commands::attach_original,
             commands::default_downloads_folder,
             commands::list_workflows,

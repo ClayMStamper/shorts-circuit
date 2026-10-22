@@ -11,7 +11,7 @@ use std::path::Path;
 
 use chrono::{DateTime, Duration, Utc};
 use shorts_domain::source::{EXPECT_ORIGINAL_MINUTES, MATCH_DURATION_TOLERANCE_MS};
-use shorts_domain::{AssetId, AssetStatus, TikTokPost, pick_post_for_download};
+use shorts_domain::{AssetId, AssetStatus, PublicationId, TikTokPost, pick_post_for_download};
 use tracing::{debug, info, warn};
 
 use crate::ImportOutcome;
@@ -114,6 +114,8 @@ impl App {
                 if let Some(post) = post {
                     self.finish_match(&post).await;
                 }
+                // Like a watch-folder file: into the workflows' collection, whose rules run.
+                self.route_watched(asset_id).await;
                 info!(asset = %asset_id, "original attached by hand");
                 self.emit(AppEvent::OriginalAttached {
                     asset_id: asset_id.to_string(),
@@ -125,6 +127,24 @@ impl App {
                 "that video is already in the library as another item".into(),
             )),
         }
+    }
+
+    /// "Send through workflows": puts an item that has its video into the collection the watch
+    /// folder feeds, so its workflows run (as for a watch-folder file). Safe to repeat: rules
+    /// never create the same publication twice. Returns the publications created.
+    pub async fn send_to_workflows(&self, asset_id: AssetId) -> AppResult<Vec<PublicationId>> {
+        let asset = self.store.assets().require(asset_id).await?;
+        if asset.status == AssetStatus::AwaitingMedia {
+            return Err(AppError::Invalid(
+                "this item doesn't have its video yet".into(),
+            ));
+        }
+        let Some(collection) = self.preferences().await?.watch_collection else {
+            return Err(AppError::Invalid(
+                "no workflow receives videos yet; create a workflow first".into(),
+            ));
+        };
+        self.add_to_collection(collection, asset_id).await
     }
 
     async fn finish_match(&self, post: &TikTokPost) {
@@ -181,6 +201,8 @@ impl App {
             }
         };
         self.finish_match(&post).await;
+        // Like a watch-folder file: into the workflows' collection, whose rules run.
+        self.route_watched(asset_id).await;
         info!(asset = %asset_id, "downloaded original attached to its TikTok post");
         self.emit(AppEvent::OriginalAttached {
             asset_id: asset_id.to_string(),

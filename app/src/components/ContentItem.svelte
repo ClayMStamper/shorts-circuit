@@ -89,6 +89,24 @@
     }
   }
 
+  async function sendToWorkflows() {
+    busy = true;
+    try {
+      const n = await api.sendToWorkflows(item.assetId);
+      toast(
+        n > 0
+          ? `Sent to ${n} workflow${n === 1 ? "" : "s"}.`
+          : "No workflow takes this video: it may predate the workflows' start date, or its rights box isn't ticked.",
+        n > 0 ? "good" : "info",
+      );
+      onChanged?.();
+    } catch (e) {
+      errorToast(e);
+    } finally {
+      busy = false;
+    }
+  }
+
   async function pickOriginal() {
     const [path] = await pickFiles({ multiple: false, extensions: VIDEO_EXTENSIONS, name: "Video" });
     if (path) await run(() => api.attachOriginal(item.assetId, path));
@@ -227,6 +245,9 @@
     {:else}
       {#if !item.waitingForMedia && !item.waitingReason}
         <p class="muted">Nothing published from this video{item.addedAt ? ` (added ${formatDateTime(item.addedAt)})` : ""}.</p>
+        <div class="btn-row">
+          <button class="small" data-testid="send-to-workflows" disabled={busy} onclick={sendToWorkflows}>Send through workflows</button>
+        </div>
       {/if}
     {/each}
   </div>

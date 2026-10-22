@@ -223,6 +223,8 @@ export const api = {
   /** Opens a waiting TikTok post and expects its downloaded video. */
   getOriginal: (assetId: string) => call<GetOriginal>("get_original", { assetId }),
   cancelGetOriginal: (assetId: string) => call<void>("cancel_get_original", { assetId }),
+  /** Runs the workflows for an item that never reached them; returns publications created. */
+  sendToWorkflows: (assetId: string) => call<number>("send_to_workflows", { assetId }),
   /** "Pick file…": attaches a chosen video to a waiting item. */
   attachOriginal: (assetId: string, path: string) => call<void>("attach_original", { assetId, path }),
   defaultDownloadsFolder: () => call<string | null>("default_downloads_folder"),
