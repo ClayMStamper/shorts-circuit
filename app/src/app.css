@@ -166,6 +166,11 @@ code {
   padding: 0.6rem 1.2rem;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
+  /* Stays in view while the page scrolls: above in-page menus (5), below the skip link (10)
+     and drawers (20). */
+  position: sticky;
+  top: 0;
+  z-index: 8;
 }
 
 .brand {
