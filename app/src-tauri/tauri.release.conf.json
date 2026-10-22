@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["nsis"],
+    "publisher": "Shorts Circuit",
+    "copyright": "MIT License",
+    "externalBin": ["binaries/ffmpeg", "binaries/ffprobe"],
+    "resources": {
+      "binaries/FFMPEG-LICENSE.txt": "licenses/FFMPEG-LICENSE.txt",
+      "binaries/FFMPEG-NOTICE.txt": "licenses/FFMPEG-NOTICE.txt"
+    },
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": {
+        "installMode": "currentUser",
+        "displayLanguageSelector": false
+      }
+    }
+  }
+}

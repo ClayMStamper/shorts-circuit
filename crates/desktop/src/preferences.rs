@@ -13,6 +13,7 @@ const EXPORT_DIR: &str = "export_dir";
 const POSTING_SLOTS: &str = "posting_slots";
 const WATCH_COLLECTION: &str = "watch_collection";
 const WATCH_CHECKED: &str = "watch_checked_at";
+const DOWNLOADS_FOLDER: &str = "downloads_folder";
 
 /// User preferences. The posting slots are interpreted in `timezone`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -27,6 +28,9 @@ pub struct Preferences {
     pub watch_collection: Option<CollectionId>,
     /// When the watch folder was last listed (read-only).
     pub watch_checked_at: Option<DateTime<Utc>>,
+    /// Also watched, but only for videos downloaded from a pending TikTok post (e.g. TikTok's
+    /// own "Download video"); anything else there is left alone. `None` = off.
+    pub downloads_folder: Option<String>,
 }
 
 impl Preferences {
@@ -51,6 +55,8 @@ pub struct PreferencesUpdate {
     pub posting_slots: Option<Vec<PostingSlot>>,
     #[serde(default, with = "double_option")]
     pub watch_collection: Option<Option<CollectionId>>,
+    #[serde(default, with = "double_option")]
+    pub downloads_folder: Option<Option<String>>,
 }
 
 mod double_option {
@@ -77,6 +83,7 @@ impl App {
             posting_slots: settings.get(POSTING_SLOTS).await?.unwrap_or_default(),
             watch_collection: settings.get(WATCH_COLLECTION).await?.flatten(),
             watch_checked_at: settings.get(WATCH_CHECKED).await?,
+            downloads_folder: settings.get(DOWNLOADS_FOLDER).await?.flatten(),
         })
     }
 
@@ -124,6 +131,14 @@ impl App {
                 return Err(AppError::Invalid(format!("{f} is not a folder")));
             }
             settings.set(WATCH_FOLDER, &folder).await?;
+        }
+        if let Some(folder) = update.downloads_folder {
+            if let Some(f) = &folder
+                && !std::path::Path::new(f).is_dir()
+            {
+                return Err(AppError::Invalid(format!("{f} is not a folder")));
+            }
+            settings.set(DOWNLOADS_FOLDER, &folder).await?;
         }
         if let Some(dir) = update.export_dir {
             settings.set(EXPORT_DIR, &dir).await?;

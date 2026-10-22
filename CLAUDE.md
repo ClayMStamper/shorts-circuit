@@ -22,8 +22,11 @@ check on Windows. Keep all of them green.
   `desktop` holds application services; the Tauri shell only translates commands.
 - Every state transition goes through the domain state machine; never write a status column
   directly.
-- Approvals bind to an immutable publication revision. Editing media, copy, or destination creates a
-  new revision and drops approval.
+- Content flows automatically by default (owner decision, 21 October 2026; see "Workflows UX" in
+  `docs/architecture.md`): a workflow with Auto Publish on approves what it created, recorded as
+  `workflow:<name>`; review is an optional setting. Approvals, by the owner or a workflow, still
+  bind to an immutable publication revision. Editing media, copy, or destination creates a new
+  revision and drops approval; a workflow never re-approves a revision it didn't create.
 - A lost publish response becomes `OutcomeUnknown`, never an automatic retry.
 - Store instants in UTC; keep the user's IANA timezone for recurring schedules.
 - No secrets, tokens, or real account identifiers in the repo, tests, or logs. Redact credentials in

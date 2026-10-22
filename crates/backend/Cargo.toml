@@ -1,6 +1,6 @@
 [package]
 name = "shorts-backend"
-description = "Axum OAuth broker for confidential client credentials; later the cloud runner."
+description = "Axum OAuth broker for confidential client credentials (the cloud runner is shorts-runner)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
