@@ -1,8 +1,9 @@
-use std::sync::{Arc, OnceLock, RwLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use chrono::{DateTime, Utc};
 use shorts_adapters::{AdapterRegistry, ErasedAdapter, ManualHandoff};
-use shorts_domain::{JobKind, Platform};
+use shorts_domain::{JobKind, Platform, PublicationId};
 use shorts_scheduler::{Clock, Worker, WorkerConfig};
 use shorts_store::Store;
 use tokio::sync::broadcast;
@@ -12,7 +13,7 @@ use crate::error::AppResult;
 use crate::events::AppEvent;
 use crate::media::MediaBackend;
 use crate::paths::AppPaths;
-use crate::pipeline::{ExportHandler, PublishHandler, RenderHandler};
+use crate::pipeline::{DesktopHost, ExportHandler, RenderHandler};
 
 /// The application core used by the desktop shell.
 pub struct App {
@@ -23,6 +24,12 @@ pub struct App {
     pub(crate) clock: Arc<dyn Clock>,
     events: broadcast::Sender<AppEvent>,
     worker: OnceLock<Arc<Worker>>,
+    /// Problems reaching the cloud runner, per cloud-owned publication (set by the sync).
+    cloud_notes: Mutex<HashMap<PublicationId, String>>,
+    /// TikTok posts the owner asked to download ("Get original"), by video id.
+    pub(crate) expected_originals: Mutex<HashMap<String, DateTime<Utc>>>,
+    /// Why a download wasn't taken for a requested post, e.g. a different length, by video id.
+    pub(crate) download_notes: Mutex<HashMap<String, String>>,
 }
 
 impl App {
@@ -44,6 +51,9 @@ impl App {
             clock,
             events,
             worker: OnceLock::new(),
+            cloud_notes: Mutex::new(HashMap::new()),
+            expected_originals: Mutex::new(HashMap::new()),
+            download_notes: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -108,7 +118,9 @@ impl App {
         );
         worker.register(
             JobKind::PublishPublication,
-            Arc::new(PublishHandler::new(weak.clone())),
+            Arc::new(shorts_publish::PublishHandler::new(Arc::new(
+                DesktopHost::new(weak.clone()),
+            ))),
         );
         worker.register(JobKind::ExportPackage, Arc::new(ExportHandler::new(weak)));
         let worker = Arc::new(worker);
@@ -135,5 +147,25 @@ impl App {
 
     pub(crate) fn running_worker(&self) -> Option<&Arc<Worker>> {
         self.worker.get()
+    }
+
+    pub(crate) fn cloud_note(&self, id: PublicationId) -> Option<String> {
+        self.cloud_notes
+            .lock()
+            .expect("cloud notes")
+            .get(&id)
+            .cloned()
+    }
+
+    pub(crate) fn set_cloud_note(&self, id: PublicationId, note: Option<String>) {
+        let mut notes = self.cloud_notes.lock().expect("cloud notes");
+        let changed = match note {
+            Some(n) => notes.insert(id, n.clone()).as_ref() != Some(&n),
+            None => notes.remove(&id).is_some(),
+        };
+        drop(notes);
+        if changed {
+            self.emit(AppEvent::PublicationChanged { id: id.to_string() });
+        }
     }
 }

@@ -384,7 +384,7 @@ impl<'a> Collections<'a> {
         Ok(u32::try_from(n).unwrap_or(u32::MAX))
     }
 
-    /// Marks an unattended firing as approved by its rule. Returns false when it already was,
+    /// Marks a firing as approved by its rule (and so unattended). Returns false when it already was,
     /// so concurrent callers approve at most once.
     pub async fn mark_auto_approved(
         &self,
@@ -392,8 +392,8 @@ impl<'a> Collections<'a> {
         at: DateTime<Utc>,
     ) -> StoreResult<bool> {
         let result = sqlx::query(
-            "UPDATE rule_firings SET auto_approved_at = ? \
-             WHERE publication_id = ? AND unattended = 1 AND auto_approved_at IS NULL",
+            "UPDATE rule_firings SET auto_approved_at = ?, unattended = 1 \
+             WHERE publication_id = ? AND auto_approved_at IS NULL",
         )
         .bind(opt_ts(Some(at)))
         .bind(id.to_string())

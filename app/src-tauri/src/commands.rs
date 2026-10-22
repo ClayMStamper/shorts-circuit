@@ -5,22 +5,24 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use shorts_adapters::linkedin::Organization;
-use shorts_desktop::instagram::InstagramStatus;
+use shorts_desktop::instagram::{InstagramPages, InstagramStatus};
 use shorts_desktop::linkedin::LinkedInStatus;
 use shorts_desktop::snapchat::{SnapConnectProgress, SnapStatus};
-use shorts_desktop::tiktok::{CheckReport, ConnectProgress, TikTokStatus};
+use shorts_desktop::tiktok::{CheckReport, ConnectProgress, TikTokAppInfo, TikTokStatus};
 use shorts_desktop::views::{
-    AccountView, AssetDetail, AssetSummary, CollectionView, MatchSuggestion, MonitorView,
-    PublicationView, ReviewView, RuleActivityView, TagCount, VariantView,
+    AccountView, ActivityView, AssetDetail, AssetSummary, CollectionView, MatchSuggestion,
+    MonitorView, PublicationView, ReviewView, RuleActivityView, TagCount, VariantView,
+    WorkflowDetailView, WorkflowView, WorkflowsView,
 };
 use shorts_desktop::youtube::{YouTubeConnectProgress, YouTubeStatus};
 use shorts_desktop::{
     AppError, AssetUpdate, EditPublication, ImportOutcome, LibraryQuery, NewPublication,
-    Preferences, PreferencesUpdate, RuleInput, ScheduleInput,
+    NewWorkflow, Preferences, PreferencesUpdate, RuleInput, ScheduleInput, WorkflowUpdate,
 };
+use shorts_domain::instagram::InstagramLogin;
 use shorts_domain::{
     AccountId, AssetId, CollectionId, JobId, OutcomeResolution, Platform, PublicationId,
-    RenderRecipe, RuleId, VariantId,
+    RenderRecipe, RuleId, VariantId, WorkflowId,
 };
 use tauri::State;
 
@@ -387,6 +389,96 @@ pub async fn set_unattended(
 }
 
 #[tauri::command]
+pub async fn list_workflows(shell: State<'_, Shell>) -> Result<WorkflowsView> {
+    shell.app.list_workflows().await
+}
+
+#[tauri::command]
+pub async fn workflow_detail(
+    shell: State<'_, Shell>,
+    id: WorkflowId,
+) -> Result<WorkflowDetailView> {
+    shell.app.workflow_detail(id).await
+}
+
+#[tauri::command]
+pub async fn create_workflow(
+    shell: State<'_, Shell>,
+    workflow: NewWorkflow,
+) -> Result<WorkflowView> {
+    shell.app.create_workflow(workflow).await
+}
+
+#[tauri::command]
+pub async fn update_workflow(
+    shell: State<'_, Shell>,
+    id: WorkflowId,
+    update: WorkflowUpdate,
+) -> Result<WorkflowView> {
+    shell.app.update_workflow(id, update).await
+}
+
+#[tauri::command]
+pub async fn delete_workflow(shell: State<'_, Shell>, id: WorkflowId) -> Result<()> {
+    shell.app.delete_workflow(id).await
+}
+
+#[tauri::command]
+pub async fn activity(shell: State<'_, Shell>, limit: Option<u32>) -> Result<ActivityView> {
+    shell.app.activity(limit.unwrap_or(200)).await
+}
+
+#[tauri::command]
+pub async fn publish_now(shell: State<'_, Shell>, id: PublicationId) -> Result<PublicationView> {
+    shell.app.publish_now(id).await
+}
+
+#[tauri::command]
+pub async fn republish(shell: State<'_, Shell>, id: PublicationId) -> Result<PublicationView> {
+    shell.app.republish(id).await
+}
+
+/// "Check for new content now": lists the watch folder and asks TikTok for new posts (when
+/// connected), then returns the Workflows page. A source that isn't set up is skipped.
+#[tauri::command]
+pub async fn check_for_new_content(shell: State<'_, Shell>) -> Result<WorkflowsView> {
+    let watch = shell
+        .watch
+        .lock()
+        .expect("watch lock")
+        .as_ref()
+        .map(|w| w.check_now());
+    if let Some(check) = watch {
+        check.await?;
+    }
+    if matches!(shell.tiktok.status().await?, TikTokStatus::Connected { .. }) {
+        shell.tiktok.check_now().await?;
+    }
+    shell.app.apply_deferred_rules().await;
+    shell.app.list_workflows().await
+}
+
+#[tauri::command]
+pub async fn tiktok_app_info(shell: State<'_, Shell>) -> Result<TikTokAppInfo> {
+    shell.tiktok.app_info()
+}
+
+/// Saves the owner's TikTok app in the OS credential store. The secret is never sent back.
+#[tauri::command]
+pub async fn tiktok_set_app(
+    shell: State<'_, Shell>,
+    client_key: String,
+    client_secret: String,
+) -> Result<TikTokStatus> {
+    shell.tiktok.set_app(&client_key, &client_secret).await
+}
+
+#[tauri::command]
+pub async fn tiktok_clear_app(shell: State<'_, Shell>) -> Result<TikTokStatus> {
+    shell.tiktok.clear_app().await
+}
+
+#[tauri::command]
 pub async fn tiktok_status(shell: State<'_, Shell>) -> Result<TikTokStatus> {
     shell.tiktok.status().await
 }
@@ -396,13 +488,13 @@ pub async fn tiktok_set_enabled(shell: State<'_, Shell>, enabled: bool) -> Resul
     shell.tiktok.set_enabled(enabled).await
 }
 
-/// Opens the broker's sign-in page in the default browser. The UI then calls
+/// Opens TikTok's (or the broker's) sign-in page in the default browser. The UI then calls
 /// `tiktok_finish_connect` until it stops reporting `pending`.
 #[tauri::command]
 pub async fn tiktok_connect(shell: State<'_, Shell>) -> Result<()> {
     let url = shell.tiktok.begin_connect().await?;
     if !matches!(url.scheme(), "https" | "http") {
-        return Err(AppError::Invalid("the broker URL must be http(s)".into()));
+        return Err(AppError::Invalid("the sign-in URL must be http(s)".into()));
     }
     open_external(url.as_str())?;
     Ok(())
@@ -490,15 +582,42 @@ pub async fn instagram_status(shell: State<'_, Shell>) -> Result<InstagramStatus
     shell.instagram.status().await
 }
 
-/// Connects the Instagram account a pasted long-lived token belongs to. The token goes to the
-/// OS credential store and is never sent back to the webview.
+/// The Facebook Pages a pasted user token manages, with their linked Instagram accounts. The
+/// token is not stored by this call.
+#[tauri::command]
+pub async fn instagram_find_pages(
+    shell: State<'_, Shell>,
+    access_token: String,
+) -> Result<InstagramPages> {
+    shell.instagram.find_pages(&access_token).await
+}
+
+/// Connects an Instagram account: with Facebook login, the one linked to `page_id` (or the only
+/// linked Page), keeping that Page's token; with Instagram login, the account the token
+/// belongs to (export packages only). Tokens go to the OS credential store and are never sent
+/// back to the webview.
 #[tauri::command]
 pub async fn instagram_connect(
     shell: State<'_, Shell>,
     access_token: String,
+    login: InstagramLogin,
+    page_id: Option<String>,
     account_id: Option<AccountId>,
 ) -> Result<InstagramStatus> {
-    shell.instagram.connect(&access_token, account_id).await?;
+    match login {
+        InstagramLogin::FacebookLogin => {
+            shell
+                .instagram
+                .connect(&access_token, page_id.as_deref(), account_id)
+                .await?
+        }
+        InstagramLogin::InstagramLogin => {
+            shell
+                .instagram
+                .connect_instagram_login(&access_token, account_id)
+                .await?
+        }
+    };
     shell.instagram.status().await
 }
 
@@ -674,6 +793,91 @@ pub async fn cancel_job(shell: State<'_, Shell>, id: JobId) -> Result<()> {
     shell.app.cancel_job(id).await
 }
 
+/// What "Get original" did, for the UI to say.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetOriginal {
+    /// The folder a download is picked up from (`None`: no downloads folder could be found).
+    pub downloads_folder: Option<String>,
+    /// Picking up downloads was off and has just been turned on.
+    pub enabled_now: bool,
+}
+
+fn os_downloads_folder(app: &tauri::AppHandle) -> Option<String> {
+    use tauri::Manager;
+    app.path()
+        .download_dir()
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
+/// "Get original": opens a waiting TikTok post in the browser and expects its video in the
+/// downloads folder (TikTok's own "Download video"). Turns picking up downloads on (the OS
+/// downloads folder) if it was off, since that's what the owner is asking for.
+#[tauri::command]
+pub async fn get_original(
+    app: tauri::AppHandle,
+    shell: State<'_, Shell>,
+    asset_id: AssetId,
+) -> Result<GetOriginal> {
+    let url = shell.app.expect_original(asset_id).await?;
+    let url = https_link(&url)?;
+    let mut result = GetOriginal {
+        downloads_folder: shell.app.preferences().await?.downloads_folder,
+        enabled_now: false,
+    };
+    if result.downloads_folder.is_none()
+        && let Some(folder) = os_downloads_folder(&app)
+    {
+        shell
+            .app
+            .update_preferences(PreferencesUpdate {
+                downloads_folder: Some(Some(folder.clone())),
+                ..Default::default()
+            })
+            .await?;
+        shell.restart_watch(&app).await;
+        result = GetOriginal {
+            downloads_folder: Some(folder),
+            enabled_now: true,
+        };
+    }
+    open_external(&url)?;
+    Ok(result)
+}
+
+/// "Send through workflows": runs the workflows for an item that never reached them. Returns how
+/// many publications were created.
+#[tauri::command]
+pub async fn send_to_workflows(shell: State<'_, Shell>, asset_id: AssetId) -> Result<usize> {
+    Ok(shell.app.send_to_workflows(asset_id).await?.len())
+}
+
+#[tauri::command]
+pub async fn cancel_get_original(shell: State<'_, Shell>, asset_id: AssetId) -> Result<()> {
+    shell.app.cancel_expect_original(asset_id).await
+}
+
+/// "Pick file…": attaches a chosen video to a waiting item.
+#[tauri::command]
+pub async fn attach_original(
+    shell: State<'_, Shell>,
+    asset_id: AssetId,
+    path: String,
+) -> Result<()> {
+    shell
+        .app
+        .attach_original(asset_id, std::path::Path::new(&path))
+        .await?;
+    Ok(())
+}
+
+/// The OS downloads folder, to offer as the folder to watch for TikTok originals.
+#[tauri::command]
+pub fn default_downloads_folder(app: tauri::AppHandle) -> Option<String> {
+    os_downloads_folder(&app)
+}
+
 #[tauri::command]
 pub async fn preferences(shell: State<'_, Shell>) -> Result<Preferences> {
     shell.app.preferences().await
@@ -685,7 +889,7 @@ pub async fn update_preferences(
     shell: State<'_, Shell>,
     update: PreferencesUpdate,
 ) -> Result<Preferences> {
-    let restart_watch = update.watch_folder.is_some();
+    let restart_watch = update.watch_folder.is_some() || update.downloads_folder.is_some();
     let prefs = shell.app.update_preferences(update).await?;
     if restart_watch {
         shell.restart_watch(&app).await;
@@ -752,8 +956,18 @@ fn https_link(url: &str) -> Result<String> {
 }
 
 /// Opens a web page in the default browser. The URL is one argument, never shell-parsed.
+///
+/// On Windows this goes through the URL protocol handler rather than `explorer`, which
+/// misreads long URLs with query strings (such as OAuth consent pages) and opens a folder.
 fn open_external(url: &str) -> Result<()> {
-    std::process::Command::new(opener()).arg(url).spawn()?;
+    if cfg!(windows) {
+        std::process::Command::new("rundll32.exe")
+            .arg("url.dll,FileProtocolHandler")
+            .arg(url)
+            .spawn()?;
+    } else {
+        std::process::Command::new(opener()).arg(url).spawn()?;
+    }
     Ok(())
 }
 
