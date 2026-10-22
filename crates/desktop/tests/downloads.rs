@@ -47,6 +47,17 @@ fn downloads(h: &Harness) -> std::path::PathBuf {
     dir
 }
 
+async fn activity_item(h: &Harness, id: AssetId) -> shorts_desktop::views::RuleItemView {
+    h.app
+        .activity(50)
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|i| i.asset_id == id.to_string())
+        .expect("the item is in Activity")
+}
+
 async fn library_count(h: &Harness) -> usize {
     h.app
         .list_assets(&LibraryQuery::default())
@@ -177,4 +188,175 @@ async fn the_downloads_watch_only_takes_new_files_that_fit() {
         AssetStatus::Ready
     );
     assert_eq!(library_count(&h).await, 1, "the old file was not imported");
+}
+
+#[tokio::test]
+async fn waiting_status_notes_and_cancel() {
+    let h = harness().await;
+    // 30 s post; the fake media backend reports 20 s for any file.
+    let post = pending_post(&h, "7010", 1, 30_000).await;
+    h.app.expect_original(post).await.unwrap();
+    let file = downloads(&h).join("Download (3).mp4");
+    std::fs::write(&file, b"a different video").unwrap();
+    assert_eq!(h.app.import_download(&file).await.unwrap(), None);
+
+    let item = activity_item(&h, post).await;
+    let until = item.expecting_original_until.expect("still waiting");
+    assert_eq!(until, t0() + ChronoDuration::minutes(30));
+    let note = item
+        .download_note
+        .expect("the skipped download is explained");
+    assert!(
+        note.contains("Download (3).mp4") && note.contains("20 s") && note.contains("30 s"),
+        "{note}"
+    );
+
+    h.app.cancel_expect_original(post).await.unwrap();
+    let item = activity_item(&h, post).await;
+    assert!(item.expecting_original_until.is_none() && item.download_note.is_none());
+}
+
+#[tokio::test]
+async fn pick_file_attaches_any_video_and_announces_it() {
+    let h = harness().await;
+    // The picked file's length doesn't matter: the owner chose it.
+    let post = pending_post(&h, "7011", 24 * 30, 90_000).await;
+    let mut rx = h.app.subscribe();
+    let file = downloads(&h).join("Download (2).mp4");
+    std::fs::write(&file, b"picked by hand").unwrap();
+    assert_eq!(h.app.attach_original(post, &file).await.unwrap(), post);
+    let asset = h.app.store().assets().require(post).await.unwrap();
+    assert_eq!(asset.status, AssetStatus::Ready);
+    assert!(
+        h.app
+            .store()
+            .tiktok_posts()
+            .pending()
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let announced = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if let AppEvent::OriginalAttached { asset_id, title } = rx.recv().await.unwrap() {
+                return (asset_id, title);
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(announced, (post.to_string(), "Post 7011".to_owned()));
+    // It already has its video now.
+    assert!(h.app.attach_original(post, &file).await.is_err());
+}
+
+/// A collection fed by the watch folder, with a rule to one export-package account.
+async fn workflow_collection(h: &Harness) -> shorts_domain::CollectionId {
+    let account = shorts_domain::ConnectedAccount::manual(
+        shorts_domain::Platform::YoutubeShorts,
+        "Channel",
+        t0(),
+    );
+    h.app.store().accounts().insert(&account).await.unwrap();
+    let c: shorts_domain::CollectionId = h
+        .app
+        .create_collection("Source videos")
+        .await
+        .unwrap()
+        .id
+        .parse()
+        .unwrap();
+    h.app
+        .create_rule(
+            c,
+            shorts_desktop::RuleInput {
+                name: "TikTok → YouTube Shorts".into(),
+                enabled: true,
+                destinations: vec![account.id],
+                output: shorts_domain::RuleOutput::AwaitingApproval,
+                caption_template: "{caption}".into(),
+                hashtags: vec![],
+                include_asset_tags: false,
+                effective_from: Some(t0() - ChronoDuration::days(30)),
+            },
+        )
+        .await
+        .unwrap();
+    h.app
+        .update_preferences(shorts_desktop::PreferencesUpdate {
+            watch_collection: Some(Some(c)),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    c
+}
+
+async fn publications_for(h: &Harness, asset: AssetId) -> usize {
+    h.app
+        .store()
+        .publications()
+        .list(&shorts_store::PublicationFilter {
+            asset_id: Some(asset),
+            ..Default::default()
+        })
+        .await
+        .unwrap()
+        .len()
+}
+
+#[tokio::test]
+async fn downloaded_and_picked_originals_reach_the_workflows() {
+    let h = harness().await;
+    let c = workflow_collection(&h).await;
+    let downloaded = pending_post(&h, "7020", 2, 20_000).await;
+    let file = downloads(&h).join("Download (3).mp4");
+    std::fs::write(&file, b"downloaded original").unwrap();
+    assert_eq!(
+        h.app.import_download(&file).await.unwrap(),
+        Some(downloaded)
+    );
+    assert!(
+        h.app
+            .store()
+            .collections()
+            .members(c)
+            .await
+            .unwrap()
+            .contains(&downloaded)
+    );
+    assert_eq!(
+        publications_for(&h, downloaded).await,
+        1,
+        "the workflow ran"
+    );
+
+    let picked = pending_post(&h, "7021", 1, 90_000).await;
+    let other = downloads(&h).join("picked.mp4");
+    std::fs::write(&other, b"picked original").unwrap();
+    h.app.attach_original(picked, &other).await.unwrap();
+    assert_eq!(publications_for(&h, picked).await, 1);
+}
+
+#[tokio::test]
+async fn send_through_workflows_rescues_a_stranded_item() {
+    let h = harness().await;
+    // Attached before downloads were routed: it has its video but never reached a workflow.
+    let stranded = pending_post(&h, "7022", 2, 20_000).await;
+    let file = downloads(&h).join("Download (4).mp4");
+    std::fs::write(&file, b"stranded original").unwrap();
+    h.app.import_file(&file, Some(stranded)).await.unwrap();
+    assert_eq!(publications_for(&h, stranded).await, 0);
+
+    // Without a workflow there is nowhere to send it.
+    assert!(h.app.send_to_workflows(stranded).await.is_err());
+    workflow_collection(&h).await;
+    assert_eq!(h.app.send_to_workflows(stranded).await.unwrap().len(), 1);
+    // Repeating it creates nothing new.
+    assert!(h.app.send_to_workflows(stranded).await.unwrap().is_empty());
+    assert_eq!(publications_for(&h, stranded).await, 1);
+
+    // An item still waiting for its video can't be sent.
+    let waiting = pending_post(&h, "7023", 1, 30_000).await;
+    assert!(h.app.send_to_workflows(waiting).await.is_err());
 }

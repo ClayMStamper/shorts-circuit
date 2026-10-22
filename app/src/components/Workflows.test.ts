@@ -248,6 +248,8 @@ function item(id: string, caption: string, publications: PublicationView[], dura
     durationMs,
     sourcePostedAt: "2026-10-21T08:30:00Z",
     sourceUrl: null,
+    expectingOriginalUntil: null,
+    downloadNote: null,
     waitingForMedia: false,
     waitingReason: null,
     addedAt: "2026-10-21T08:40:00Z",
