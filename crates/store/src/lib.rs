@@ -12,9 +12,11 @@ mod collections;
 mod jobs;
 mod media_files;
 mod publications;
+mod quota;
 mod settings;
 mod tiktok;
 mod variants;
+mod workflows;
 
 use std::path::Path;
 use std::str::FromStr;
@@ -32,9 +34,11 @@ pub use collections::{CollectionSummary, Collections};
 pub use jobs::{JobFilter, Jobs};
 pub use media_files::MediaFiles;
 pub use publications::{PublicationFilter, PublicationLogEntry, Publications};
+pub use quota::Quota;
 pub use settings::Settings;
 pub use tiktok::TikTokPosts;
 pub use variants::Variants;
+pub use workflows::Workflows;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 
@@ -94,11 +98,16 @@ pub enum StoreError {
     DuplicateMedia { checksum: String },
     #[error("the name {name:?} is already taken")]
     DuplicateName { name: String },
+    #[error("there is already a workflow from this source to that account")]
+    DuplicateWorkflow { collection: String, account: String },
     #[error("an open {kind} job already exists for {subject}")]
     DuplicateOpenJob { kind: String, subject: String },
     /// A job transition was refused, e.g. the caller no longer holds the lease.
     #[error(transparent)]
     Job(#[from] shorts_domain::job::JobError),
+    /// A publication change chosen inside a store transaction was refused by the domain.
+    #[error(transparent)]
+    Transition(#[from] shorts_domain::TransitionError),
     #[error("stored data is invalid: {0}")]
     Corrupt(String),
 }
@@ -209,6 +218,14 @@ impl Store {
         TikTokPosts::new(&self.pool)
     }
 
+    pub fn quota(&self) -> Quota<'_> {
+        Quota::new(&self.pool)
+    }
+
+    pub fn workflows(&self) -> Workflows<'_> {
+        Workflows::new(&self.pool)
+    }
+
     pub fn settings(&self) -> Settings<'_> {
         Settings::new(&self.pool)
     }
@@ -270,6 +287,66 @@ impl Store {
         tiktok::merge(&mut tx, video_id, awaiting, target, at).await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Hands publication `id` to the cloud runner under `handover`, in one `BEGIN IMMEDIATE`
+    /// transaction (the same write lock [`Jobs::claim_next`] takes, so the desktop worker can't
+    /// claim its job in between). `reached_provider` reads the open publish job's checkpoint;
+    /// the domain refuses the hand-over if that job is running or already reached the
+    /// platform. The open job is cancelled, so the desktop never runs it.
+    pub async fn hand_over_to_cloud(
+        &self,
+        id: shorts_domain::PublicationId,
+        handover: shorts_domain::HandoverId,
+        now: chrono::DateTime<chrono::Utc>,
+        reached_provider: impl FnOnce(&shorts_domain::Job) -> bool,
+    ) -> StoreResult<shorts_domain::Publication> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let result = async {
+            let mut publication = publications::get_publication(&mut tx, id)
+                .await?
+                .ok_or_else(|| StoreError::not_found("publication", id))?;
+            let subject = id.to_string();
+            let job = jobs::open_for_tx(
+                &mut tx,
+                shorts_domain::JobKind::PublishPublication,
+                &subject,
+            )
+            .await?;
+            let execution = shorts_domain::Execution {
+                job_running: job
+                    .as_ref()
+                    .is_some_and(|j| j.state() == shorts_domain::JobState::Running),
+                reached_provider: job.as_ref().is_some_and(reached_provider),
+            };
+            let transition = publication.apply(
+                shorts_domain::PublicationEvent::HandToCloud {
+                    handover,
+                    execution,
+                },
+                now,
+            )?;
+            if let Some(mut job) = job {
+                let loaded = job.version();
+                job.cancel(now)?;
+                jobs::write_tx(&mut tx, &job, loaded).await?;
+            }
+            publications::save_publication(&mut tx, &publication, &transition).await?;
+            Ok(publication)
+        }
+        .await;
+        // Roll back right away on a refusal, so the write lock isn't held until the
+        // connection's next use.
+        match result {
+            Ok(p) => {
+                tx.commit().await?;
+                Ok(p)
+            }
+            Err(e) => {
+                tx.rollback().await?;
+                Err(e)
+            }
+        }
     }
 
     /// Records that a rule created `publication`, inserting both in one transaction. Returns

@@ -8,11 +8,11 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use shorts_domain::{Job, JobId, PauseReason};
-use shorts_store::Store;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::clock::Clock;
+use crate::queue::JobQueue;
 
 /// Why a handler stopped without finishing. The worker maps each kind to a disposition.
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
@@ -106,7 +106,7 @@ pub trait JobHandler: Send + Sync + 'static {
 
 /// Per-run access to the job's checkpoint and lease.
 pub struct JobContext {
-    store: Store,
+    queue: Arc<dyn JobQueue>,
     job_id: JobId,
     owner: String,
     clock: Arc<dyn Clock>,
@@ -117,14 +117,14 @@ pub struct JobContext {
 
 impl JobContext {
     pub(crate) fn new(
-        store: Store,
+        queue: Arc<dyn JobQueue>,
         job: &Job,
         owner: String,
         clock: Arc<dyn Clock>,
         cancel: CancellationToken,
     ) -> Self {
         Self {
-            store,
+            queue,
             job_id: job.id(),
             owner,
             clock,
@@ -155,10 +155,13 @@ impl JobContext {
     pub async fn save_checkpoint<T: Serialize>(&self, value: &T) -> Result<(), JobFailure> {
         let json = serde_json::to_value(value)
             .map_err(|e| JobFailure::permanent(format!("checkpoint is not serializable: {e}")))?;
+        let now = self.clock.now();
+        let owner = self.owner.as_str();
         match self
-            .store
-            .jobs()
-            .save_checkpoint(self.job_id, &self.owner, json.clone(), self.clock.now())
+            .queue
+            .modify(self.job_id, &|j| {
+                j.save_checkpoint(owner, json.clone(), now)
+            })
             .await
         {
             Ok(_) => {
@@ -180,9 +183,5 @@ impl JobContext {
     /// Resolves when the lease is lost or the worker shuts down.
     pub async fn cancelled(&self) {
         self.cancel.cancelled().await;
-    }
-
-    pub fn store(&self) -> &Store {
-        &self.store
     }
 }

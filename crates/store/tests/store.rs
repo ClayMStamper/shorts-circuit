@@ -7,10 +7,11 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use shorts_domain::{
     Asset, AssetStatus, AttemptOutcome, Checksum, Collection, CollectionRule, ConnectedAccount,
-    Destination, Job, JobKind, JobState, MediaFile, MediaFileId, MediaProperties, OverduePolicy,
-    PermissionStatus, Platform, Publication, PublicationEvent, PublicationState, PublishAttempt,
-    Rating, RenderRecipe, RevisionContent, RuleFiring, RuleId, RuleOutput, RuleSpec, Schedule, Tag,
-    TikTokPost, TimeZoneName, UnattendedGrant, Variant,
+    Destination, ExecutionOwner, HandoverId, InFlight, Job, JobKind, JobState, MediaFile,
+    MediaFileId, MediaProperties, OverduePolicy, PermissionStatus, Platform, Publication,
+    PublicationEvent, PublicationState, PublishAttempt, Rating, RenderRecipe, RevisionContent,
+    RuleFiring, RuleId, RuleOutput, RuleSpec, Schedule, Tag, TikTokPost, TimeZoneName,
+    TransitionError, UnattendedGrant, Variant, Workflow, WorkflowSettings,
 };
 use shorts_store::{AssetFilter, JobFilter, PublicationFilter, Store, StoreError};
 use tempfile::TempDir;
@@ -1119,4 +1120,277 @@ async fn tiktok_posts_are_recorded_once_and_merged_into_the_imported_file() {
         .await
         .unwrap();
     assert_eq!(window.len(), 1);
+}
+
+#[tokio::test]
+async fn quota_spend_accumulates_per_bucket_and_day() {
+    let (_dir, store) = store().await;
+    let q = store.quota();
+    let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+    let next = day.succ_opt().unwrap();
+    assert_eq!(q.used("youtube:units", day).await.unwrap(), 0);
+    assert_eq!(q.spend("youtube:units", day, 1).await.unwrap(), 1);
+    assert_eq!(q.spend("youtube:units", day, 2).await.unwrap(), 3);
+    assert_eq!(q.spend("youtube:uploads", day, 1).await.unwrap(), 1);
+    assert_eq!(q.spend("youtube:units", next, 5).await.unwrap(), 5);
+    assert_eq!(q.used("youtube:units", day).await.unwrap(), 3);
+
+    q.exhaust("youtube:units", day, 10_000).await.unwrap();
+    assert_eq!(q.used("youtube:units", day).await.unwrap(), 10_000);
+    // Exhausting never lowers a count.
+    q.exhaust("youtube:units", day, 50).await.unwrap();
+    assert_eq!(q.used("youtube:units", day).await.unwrap(), 10_000);
+
+    assert_eq!(q.prune_before(next).await.unwrap(), 2);
+    assert_eq!(q.used("youtube:units", next).await.unwrap(), 5);
+}
+
+// --- execution ownership --------------------------------------------------------------------
+
+/// An approved publication with its queued publish job, due at `t0`.
+async fn scheduled_with_job(store: &Store, f: &Fixture) -> (Publication, Job) {
+    let mut p = draft(f);
+    store.publications().insert(&p).await.unwrap();
+    for event in [
+        PublicationEvent::SubmitForReview,
+        PublicationEvent::Approve {
+            revision: 1,
+            current_variant_revision: 1,
+            by: "owner".into(),
+        },
+    ] {
+        let t = p.apply(event, t0()).unwrap();
+        store.publications().save(&p, &t).await.unwrap();
+    }
+    let job = job(&p.id().to_string(), t0());
+    store.jobs().insert(&job).await.unwrap();
+    (p, job)
+}
+
+#[tokio::test]
+async fn handing_over_moves_ownership_and_cancels_the_desktop_job() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 21).await;
+    let (p, job) = scheduled_with_job(&store, &f).await;
+
+    let handover = HandoverId::new();
+    let moved = store
+        .hand_over_to_cloud(p.id(), handover, t0(), |_| false)
+        .await
+        .unwrap();
+    assert_eq!(moved.owner(), ExecutionOwner::Cloud);
+    assert_eq!(moved.handover(), Some(handover));
+    let loaded = store.publications().require(p.id()).await.unwrap();
+    assert_eq!(loaded, moved);
+    assert_eq!(
+        store.jobs().require(job.id()).await.unwrap().state(),
+        JobState::Cancelled
+    );
+    let log = store.publications().log(p.id()).await.unwrap();
+    assert_eq!(log.last().unwrap().event, "hand_to_cloud");
+    let cloud = store
+        .publications()
+        .list(&PublicationFilter {
+            owner: Some(ExecutionOwner::Cloud),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(cloud.len(), 1);
+
+    // Even a publish job enqueued afterwards is never claimed on the desktop.
+    store
+        .jobs()
+        .insert(&self::job(&p.id().to_string(), t0()))
+        .await
+        .unwrap();
+    assert!(
+        store
+            .jobs()
+            .claim_next("desktop:w", t0(), Duration::seconds(60), &[])
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn handing_over_is_refused_while_the_desktop_job_runs_or_reached_the_platform() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 22).await;
+    let (p, job) = scheduled_with_job(&store, &f).await;
+
+    let err = store
+        .hand_over_to_cloud(p.id(), HandoverId::new(), t0(), |_| true)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        StoreError::Transition(TransitionError::InFlight(InFlight::ReachedProvider))
+    ));
+
+    let claimed = store
+        .jobs()
+        .claim_next("desktop:w", t0(), Duration::seconds(60), &[])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.id(), job.id());
+    let err = store
+        .hand_over_to_cloud(p.id(), HandoverId::new(), t0(), |_| false)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        StoreError::Transition(TransitionError::InFlight(InFlight::JobRunning))
+    ));
+    let loaded = store.publications().require(p.id()).await.unwrap();
+    assert_eq!(loaded.owner(), ExecutionOwner::Desktop);
+    let still = store.jobs().require(job.id()).await.unwrap();
+    assert_eq!(still.state(), JobState::Running);
+    assert_eq!(still.lease().unwrap().owner, "desktop:w");
+}
+
+/// The desktop worker claiming a job and the user handing its publication to the cloud race;
+/// exactly one wins, every time.
+#[tokio::test]
+async fn claiming_and_handing_over_never_both_win() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 23).await;
+    let (mut claims, mut handovers) = (0, 0);
+    for _ in 0..30 {
+        let (p, _) = scheduled_with_job(&store, &f).await;
+        let id = p.id();
+        let claimer = {
+            let store = store.clone();
+            tokio::spawn(async move {
+                store
+                    .jobs()
+                    .claim_next("desktop:w", t0(), Duration::seconds(60), &[])
+                    .await
+                    .unwrap()
+            })
+        };
+        let mover = {
+            let store = store.clone();
+            tokio::spawn(async move {
+                store
+                    .hand_over_to_cloud(id, HandoverId::new(), t0(), |_| false)
+                    .await
+            })
+        };
+        let claimed = claimer.await.unwrap();
+        let moved = mover.await.unwrap();
+        match (claimed, moved) {
+            (Some(job), Err(StoreError::Transition(TransitionError::InFlight(_)))) => {
+                assert_eq!(job.subject(), p.id().to_string());
+                claims += 1;
+                // Finish it so the next round's claim only sees the new job.
+                store
+                    .jobs()
+                    .modify(job.id(), |j| j.succeed("desktop:w", t0()))
+                    .await
+                    .unwrap();
+            }
+            (None, Ok(moved)) => {
+                assert_eq!(moved.owner(), ExecutionOwner::Cloud);
+                handovers += 1;
+            }
+            (claimed, moved) => panic!("both or neither won: {claimed:?} / {moved:?}"),
+        }
+    }
+    assert_eq!(claims + handovers, 30);
+}
+
+#[tokio::test]
+async fn workflows_wrap_a_rule_and_grant_and_go_with_them() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 41).await;
+    let c = Collection::new("Source videos", t0()).unwrap();
+    store.collections().insert(&c).await.unwrap();
+    let spec = RuleSpec {
+        name: "TikTok → Instagram Reels".into(),
+        enabled: true,
+        destinations: vec![f.account.id],
+        output: RuleOutput::AwaitingApproval,
+        caption_template: String::new(),
+        hashtags: vec![],
+        include_asset_tags: false,
+    };
+    let rule = CollectionRule::new(c.id, spec.clone(), None, t0()).unwrap();
+    let workflow = Workflow::new(
+        rule.id,
+        c.id,
+        f.account.id,
+        WorkflowSettings::default(),
+        true,
+        t0(),
+    );
+    let grant = UnattendedGrant {
+        collection_id: c.id,
+        account_id: f.account.id,
+        enabled_at: t0(),
+        enabled_by: "owner".into(),
+    };
+    store
+        .workflows()
+        .create(&rule, &workflow, Some(&grant))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.workflows().list().await.unwrap(),
+        vec![workflow.clone()]
+    );
+    assert_eq!(
+        store.workflows().for_rule(rule.id).await.unwrap(),
+        Some(workflow.clone())
+    );
+    assert_eq!(
+        store.collections().rules(c.id).await.unwrap(),
+        vec![rule.clone()]
+    );
+    assert!(
+        store
+            .collections()
+            .grant(c.id, f.account.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // One workflow per collection and account; the failed attempt writes nothing.
+    let second = CollectionRule::new(c.id, spec, None, t0()).unwrap();
+    let dup = Workflow::new(
+        second.id,
+        c.id,
+        f.account.id,
+        WorkflowSettings::default(),
+        false,
+        t0(),
+    );
+    assert!(matches!(
+        store.workflows().create(&second, &dup, None).await,
+        Err(StoreError::DuplicateWorkflow { .. })
+    ));
+    assert_eq!(store.collections().rules(c.id).await.unwrap().len(), 1);
+
+    let mut edited = workflow.clone();
+    edited.confirm_rights(false, t0() + Duration::minutes(1));
+    store.workflows().update(&edited).await.unwrap();
+    assert_eq!(
+        store.workflows().require(workflow.id).await.unwrap(),
+        edited
+    );
+
+    store.workflows().delete(workflow.id).await.unwrap();
+    assert!(store.workflows().get(workflow.id).await.unwrap().is_none());
+    assert!(store.collections().rule(rule.id).await.unwrap().is_none());
+    assert!(
+        store
+            .collections()
+            .grant(c.id, f.account.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

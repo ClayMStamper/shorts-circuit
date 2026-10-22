@@ -1,6 +1,7 @@
 use chrono::Duration;
 
 use super::*;
+use crate::ownership::{Execution, ExecutionOwner, InFlight};
 use crate::schedule::TimeZoneName;
 
 fn t0() -> DateTime<Utc> {
@@ -99,12 +100,22 @@ fn sample_events(variant: VariantId) -> Vec<PublicationEvent> {
         },
         E::Retry,
         E::Cancel,
-        E::BeginPreparing,
+        E::HandToCloud {
+            handover: HandoverId::new(),
+            execution: Execution::IDLE,
+        },
+        E::ReturnToDesktop {
+            execution: Execution::IDLE,
+        },
+        E::BeginPreparing {
+            by: ExecutionOwner::Desktop,
+        },
         E::Advance {
             to: ActiveStage::Uploading,
         },
         E::Resume {
             at: ActiveStage::Uploading,
+            by: ExecutionOwner::Desktop,
         },
         E::HandoffReady {
             package_dir: "out".into(),
@@ -112,6 +123,7 @@ fn sample_events(variant: VariantId) -> Vec<PublicationEvent> {
         E::Published {
             url: None,
             remote_id: None,
+            note: None,
         },
         E::RetryScheduled {
             at: t0(),
@@ -162,6 +174,9 @@ fn expected_allowed(state: PublicationState, event: &str) -> bool {
         "resolve_outcome" => state == OutcomeUnknown,
         "retry" => state == Failed,
         "cancel" => !matches!(state, Published | Cancelled | Publishing | OutcomeUnknown),
+        "hand_to_cloud" => state == Scheduled,
+        // These publications are desktop-owned.
+        "return_to_desktop" | "mirror" => false,
         "begin_preparing" => state == Scheduled,
         "advance" => state == Preparing,
         "resume" => state == RetryScheduled,
@@ -218,7 +233,13 @@ fn happy_path_reaches_published() {
     assert_eq!(p.state(), PublicationState::Scheduled);
     assert!(p.has_valid_approval());
     assert_eq!(p.due_at(), Some(schedule().at));
-    p.apply(E::BeginPreparing, t0()).unwrap();
+    p.apply(
+        E::BeginPreparing {
+            by: ExecutionOwner::Desktop,
+        },
+        t0(),
+    )
+    .unwrap();
     for stage in [
         ActiveStage::Uploading,
         ActiveStage::Processing,
@@ -231,6 +252,7 @@ fn happy_path_reaches_published() {
         E::Published {
             url: Some("https://example.com/p/1".into()),
             remote_id: Some("r1".into()),
+            note: None,
         },
         t0(),
     )
@@ -470,6 +492,7 @@ fn transient_failure_retries_from_the_checkpointed_stage() {
     p.apply(
         PublicationEvent::Resume {
             at: ActiveStage::Uploading,
+            by: ExecutionOwner::Desktop,
         },
         at,
     )
@@ -605,7 +628,13 @@ fn workers_cannot_start_unapproved_work() {
     record.approval.as_mut().unwrap().revision = 0;
     let mut p = Publication::from_record(record);
     assert_eq!(
-        p.apply(PublicationEvent::BeginPreparing, t0()).unwrap_err(),
+        p.apply(
+            PublicationEvent::BeginPreparing {
+                by: ExecutionOwner::Desktop
+            },
+            t0()
+        )
+        .unwrap_err(),
         TransitionError::NotApproved
     );
 }
@@ -652,4 +681,380 @@ fn state_names_round_trip() {
         let json = serde_json::to_string(&state).unwrap();
         assert_eq!(json, format!("\"{}\"", state.as_str()));
     }
+}
+
+// --- execution ownership --------------------------------------------------------------------
+
+fn cloud_owned(state: PublicationState) -> Publication {
+    let mut record = in_state(state).record().clone();
+    record.owner = ExecutionOwner::Cloud;
+    record.handover = Some(HandoverId::new());
+    Publication::from_record(record)
+}
+
+fn hand_to_cloud(p: &mut Publication, execution: Execution) -> Result<HandoverId, TransitionError> {
+    let handover = HandoverId::new();
+    p.apply(
+        PublicationEvent::HandToCloud {
+            handover,
+            execution,
+        },
+        t0(),
+    )?;
+    Ok(handover)
+}
+
+fn report(p: &Publication, state: PublicationState) -> OwnerReport {
+    let mut r = p.owner_report(p.handover().unwrap(), false);
+    r.state = state;
+    r
+}
+
+#[test]
+fn handing_over_moves_ownership_and_keeps_the_revision() {
+    let mut p = in_state(PublicationState::Scheduled);
+    let handover = hand_to_cloud(&mut p, Execution::IDLE).unwrap();
+    assert_eq!(p.owner(), ExecutionOwner::Cloud);
+    assert_eq!(p.handover(), Some(handover));
+    assert_eq!(p.state(), PublicationState::Scheduled);
+    assert!(p.has_valid_approval());
+    assert_eq!(p.revision().number, 1);
+    // A second hand-over is refused.
+    assert!(hand_to_cloud(&mut p, Execution::IDLE).is_err());
+}
+
+#[test]
+fn handing_over_needs_an_approved_untouched_scheduled_publication() {
+    for state in PublicationState::ALL {
+        let mut p = in_state(state);
+        let ok = hand_to_cloud(&mut p, Execution::IDLE).is_ok();
+        assert_eq!(ok, state == PublicationState::Scheduled, "{state}");
+    }
+    let mut unapproved = in_state(PublicationState::Scheduled).record().clone();
+    unapproved.approval.as_mut().unwrap().revision = 0;
+    assert_eq!(
+        hand_to_cloud(&mut Publication::from_record(unapproved), Execution::IDLE),
+        Err(TransitionError::NotApproved)
+    );
+    let base = in_state(PublicationState::Scheduled);
+    for (execution, why) in [
+        (
+            Execution {
+                job_running: true,
+                reached_provider: false,
+            },
+            InFlight::JobRunning,
+        ),
+        (
+            Execution {
+                job_running: false,
+                reached_provider: true,
+            },
+            InFlight::ReachedProvider,
+        ),
+    ] {
+        let mut p = base.clone();
+        assert_eq!(
+            hand_to_cloud(&mut p, execution),
+            Err(TransitionError::InFlight(why))
+        );
+        assert_eq!(p, base, "a refused hand-over changes nothing");
+    }
+}
+
+#[test]
+fn the_user_cannot_change_a_cloud_owned_publication() {
+    use PublicationEvent as E;
+    for state in PublicationState::ALL {
+        let base = cloud_owned(state);
+        for event in sample_events(base.content().variant_id) {
+            let user = matches!(
+                event,
+                E::SubmitForReview
+                    | E::Approve { .. }
+                    | E::RevokeApproval
+                    | E::Revise { .. }
+                    | E::Reschedule { .. }
+                    | E::ResolveUserAction
+                    | E::ConfirmManualPost { .. }
+                    | E::ResolveOutcome { .. }
+                    | E::Retry
+                    | E::Cancel
+            );
+            let mut p = base.clone();
+            let result = p.apply(event, t0());
+            if user {
+                assert_eq!(result, Err(TransitionError::OwnedByCloud), "{state}");
+                assert_eq!(p, base);
+            }
+        }
+    }
+}
+
+#[test]
+fn only_the_owner_starts_work() {
+    use PublicationEvent as E;
+    let mut desktop_copy = in_state(PublicationState::Scheduled);
+    hand_to_cloud(&mut desktop_copy, Execution::IDLE).unwrap();
+    let runner_copy = Publication::received_from_desktop(desktop_copy.record().clone()).unwrap();
+
+    // The desktop no longer can.
+    assert_eq!(
+        desktop_copy
+            .clone()
+            .apply(
+                E::BeginPreparing {
+                    by: ExecutionOwner::Desktop
+                },
+                t0()
+            )
+            .unwrap_err(),
+        TransitionError::NotOwner {
+            executor: ExecutionOwner::Desktop,
+            owner: ExecutionOwner::Cloud
+        }
+    );
+    // The runner can.
+    let mut running = runner_copy.clone();
+    running
+        .apply(
+            E::BeginPreparing {
+                by: ExecutionOwner::Cloud,
+            },
+            t0(),
+        )
+        .unwrap();
+
+    // Once the runner gives it back, it can't start it any more, and the desktop can.
+    let mut released = runner_copy.clone();
+    released
+        .apply(
+            E::ReturnToDesktop {
+                execution: Execution::IDLE,
+            },
+            t0(),
+        )
+        .unwrap();
+    assert!(
+        released
+            .clone()
+            .apply(
+                E::BeginPreparing {
+                    by: ExecutionOwner::Cloud
+                },
+                t0()
+            )
+            .is_err()
+    );
+    released
+        .apply(
+            E::BeginPreparing {
+                by: ExecutionOwner::Desktop,
+            },
+            t0(),
+        )
+        .unwrap();
+
+    let mut retry = cloud_owned(PublicationState::RetryScheduled);
+    assert!(matches!(
+        retry.apply(
+            E::Resume {
+                at: ActiveStage::Preparing,
+                by: ExecutionOwner::Desktop
+            },
+            t0()
+        ),
+        Err(TransitionError::NotOwner { .. })
+    ));
+    retry
+        .apply(
+            E::Resume {
+                at: ActiveStage::Preparing,
+                by: ExecutionOwner::Cloud,
+            },
+            t0(),
+        )
+        .unwrap();
+}
+
+#[test]
+fn taking_back_is_refused_while_the_cloud_attempt_is_in_flight() {
+    use PublicationState as S;
+    for state in S::ALL {
+        let mut p = cloud_owned(state);
+        let result = p.apply(
+            PublicationEvent::ReturnToDesktop {
+                execution: Execution::IDLE,
+            },
+            t0(),
+        );
+        if state.is_active() {
+            assert_eq!(result, Err(TransitionError::InFlight(InFlight::Active)));
+        } else {
+            result.unwrap();
+            assert_eq!(p.owner(), ExecutionOwner::Desktop);
+            assert_eq!(p.handover(), None);
+            assert_eq!(p.state(), state, "the state is kept");
+        }
+    }
+    let mut running = cloud_owned(S::Scheduled);
+    assert_eq!(
+        running.apply(
+            PublicationEvent::ReturnToDesktop {
+                execution: Execution {
+                    job_running: true,
+                    reached_provider: false
+                }
+            },
+            t0()
+        ),
+        Err(TransitionError::InFlight(InFlight::JobRunning))
+    );
+    // Unresolved outcomes can come back so the user resolves them on the desktop.
+    let mut unknown = cloud_owned(S::OutcomeUnknown);
+    unknown
+        .apply(
+            PublicationEvent::ReturnToDesktop {
+                execution: Execution {
+                    job_running: false,
+                    reached_provider: true,
+                },
+            },
+            t0(),
+        )
+        .unwrap();
+    unknown
+        .apply(
+            PublicationEvent::ResolveOutcome {
+                resolution: OutcomeResolution::NotPublished,
+            },
+            t0(),
+        )
+        .unwrap();
+}
+
+#[test]
+fn the_desktop_mirrors_the_runner() {
+    let mut p = in_state(PublicationState::Scheduled);
+    hand_to_cloud(&mut p, Execution::IDLE).unwrap();
+
+    let mut uploading = report(&p, PublicationState::Uploading);
+    uploading.reached_provider = true;
+    p.apply(
+        PublicationEvent::Mirror {
+            report: uploading.clone(),
+        },
+        t0(),
+    )
+    .unwrap();
+    assert_eq!(p.state(), PublicationState::Uploading);
+    assert_eq!(
+        p.apply(PublicationEvent::Mirror { report: uploading }, t0()),
+        Err(TransitionError::Unchanged)
+    );
+
+    let mut done = report(&p, PublicationState::Published);
+    done.published = Some(PublishedRef {
+        url: Some("https://youtube.com/shorts/abc".into()),
+        remote_id: Some("abc".into()),
+        published_at: t0(),
+        manual: false,
+        note: None,
+    });
+    p.apply(
+        PublicationEvent::Mirror {
+            report: done.clone(),
+        },
+        t0(),
+    )
+    .unwrap();
+    assert_eq!(p.state(), PublicationState::Published);
+    assert_eq!(
+        p.published().unwrap().url.as_deref(),
+        Some("https://youtube.com/shorts/abc")
+    );
+    // Published is terminal.
+    assert!(
+        p.apply(
+            PublicationEvent::Mirror {
+                report: report(&p, PublicationState::Failed)
+            },
+            t0()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn stale_or_impossible_reports_are_refused() {
+    let mut p = in_state(PublicationState::Scheduled);
+    hand_to_cloud(&mut p, Execution::IDLE).unwrap();
+    let base = p.clone();
+
+    let mut other_handover = report(&p, PublicationState::Uploading);
+    other_handover.handover = HandoverId::new();
+    let mut other_revision = report(&p, PublicationState::Uploading);
+    other_revision.revision = 2;
+    for r in [other_handover, other_revision] {
+        assert_eq!(
+            p.apply(PublicationEvent::Mirror { report: r }, t0()),
+            Err(TransitionError::StaleReport)
+        );
+    }
+    for state in [
+        PublicationState::Draft,
+        PublicationState::AwaitingApproval,
+        PublicationState::Cancelled,
+    ] {
+        assert!(matches!(
+            p.apply(
+                PublicationEvent::Mirror {
+                    report: report(&p, state)
+                },
+                t0()
+            ),
+            Err(TransitionError::NotAllowed { .. })
+        ));
+    }
+    assert_eq!(p, base);
+
+    // A desktop-owned publication ignores reports.
+    let mut desktop = in_state(PublicationState::Scheduled);
+    let mut r = report(&p, PublicationState::Uploading);
+    r.publication_id = desktop.id();
+    assert!(
+        desktop
+            .apply(PublicationEvent::Mirror { report: r }, t0())
+            .is_err()
+    );
+}
+
+#[test]
+fn the_runner_accepts_only_handed_over_approved_work() {
+    let mut p = in_state(PublicationState::Scheduled);
+    assert!(Publication::received_from_desktop(p.record().clone()).is_err());
+    hand_to_cloud(&mut p, Execution::IDLE).unwrap();
+    assert!(Publication::received_from_desktop(p.record().clone()).is_ok());
+
+    let mut unapproved = p.record().clone();
+    unapproved.approval = None;
+    assert_eq!(
+        Publication::received_from_desktop(unapproved),
+        Err(TransitionError::NotApproved)
+    );
+    let mut published = p.record().clone();
+    published.state = PublicationState::Published;
+    assert!(Publication::received_from_desktop(published).is_err());
+}
+
+#[test]
+fn records_without_an_owner_are_desktop_owned() {
+    let p = in_state(PublicationState::Scheduled);
+    let mut json = serde_json::to_value(p.record()).unwrap();
+    let obj = json.as_object_mut().unwrap();
+    obj.remove("owner");
+    obj.remove("handover");
+    let record: PublicationRecord = serde_json::from_value(json).unwrap();
+    assert_eq!(record.owner, ExecutionOwner::Desktop);
+    assert_eq!(record.handover, None);
 }

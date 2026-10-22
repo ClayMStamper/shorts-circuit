@@ -99,6 +99,12 @@
         <section>
           <h3>Destination</h3>
           <p><strong>{review.account.platformName}</strong> · {review.account.displayName}</p>
+          {#if review.account.automatic && review.account.privateOnly}
+            <p class="note" data-testid="private-upload">
+              Uploads to this channel go up as <strong>private</strong>: YouTube keeps uploads from Google Cloud projects
+              that haven't passed its API audit private. You'll find the video in YouTube Studio.
+            </p>
+          {/if}
           {#if !review.account.automatic}
             <p class="muted">Published through an export package: {review.account.missingReason}</p>
           {/if}

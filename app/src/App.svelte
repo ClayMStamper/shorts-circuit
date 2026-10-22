@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { api } from "./lib/api";
   import { onAppEvent, onFileDrop } from "./lib/tauri";
   import type { AppEvent, MediaStatus } from "./lib/types";
@@ -9,17 +9,50 @@
   import Monitor from "./components/Monitor.svelte";
   import Settings from "./components/Settings.svelte";
   import Collections from "./components/Collections.svelte";
+  import Workflows from "./components/Workflows.svelte";
+  import WorkflowDetail from "./components/WorkflowDetail.svelte";
+  import Activity from "./components/Activity.svelte";
+  import Connections from "./components/Connections.svelte";
   import Toasts, { toast } from "./components/Toasts.svelte";
 
   type Route =
+    | { view: "workflows" }
+    | { view: "workflow"; id: string; settings?: boolean }
+    | { view: "activity" }
+    | { view: "connections" }
+    | { view: "settings" }
+    // Advanced (under Settings):
     | { view: "library" }
     | { view: "asset"; id: string }
     | { view: "review"; id: string }
     | { view: "monitor" }
-    | { view: "collections" }
-    | { view: "settings" };
+    | { view: "collections" };
 
-  let route = $state<Route>({ view: "library" });
+  type Section = "workflows" | "activity" | "connections" | "settings";
+
+  const NAV: Array<{ section: Section; label: string }> = [
+    { section: "workflows", label: "Workflows" },
+    { section: "activity", label: "Activity" },
+    { section: "connections", label: "Connections" },
+    { section: "settings", label: "Settings" },
+  ];
+
+  let route = $state<Route>({ view: "workflows" });
+  const section = $derived<Section>(
+    route.view === "workflow"
+      ? "workflows"
+      : route.view === "activity" || route.view === "connections" || route.view === "workflows"
+        ? route.view
+        : "settings",
+  );
+  const advanced = $derived(["library", "asset", "review", "monitor", "collections"].includes(route.view));
+  const ADVANCED_LABEL: Record<string, string> = {
+    library: "Library",
+    asset: "Library",
+    review: "Review",
+    monitor: "Monitor",
+    collections: "Collections",
+  };
   let dragging = $state(false);
   let media = $state<MediaStatus | null>(null);
   // Bumped on backend events so screens reload their data.
@@ -27,6 +60,8 @@
 
   function go(next: Route) {
     route = next;
+    // Screen readers and keyboard users start at the top of the new page.
+    tick().then(() => document.getElementById("main")?.focus({ preventScroll: true }));
   }
 
   async function importPaths(paths: string[]) {
@@ -53,10 +88,13 @@
         toast(`Watch folder: ${event.message}`, "bad");
         break;
       case "rulesFailed":
-        toast(`Collection rules: ${event.message}`, "bad");
+        toast(`A workflow couldn't handle a video: ${event.message}`, "bad");
+        break;
+      case "originalAttached":
+        toast(`Got the original for “${event.title}”. Its workflows take it from here.`, "good");
         break;
       case "matchSuggested":
-        toast("A new file may be the original of a TikTok post; check the library.", "info");
+        toast("A new file may be the original of a TikTok post; confirm it in Settings → Advanced → Library.", "info");
         break;
       case "renderProgress":
       case "watchFolderChecked":
@@ -78,30 +116,56 @@
 </script>
 
 <div class="shell">
+  <a class="skip-link" href="#main">Skip to content</a>
   <header class="topbar">
     <div class="brand">Shorts Circuit</div>
-    <nav>
-      <button class:active={route.view === "library" || route.view === "asset"} onclick={() => go({ view: "library" })}>
-        Library
-      </button>
-      <button class:active={route.view === "monitor" || route.view === "review"} onclick={() => go({ view: "monitor" })}>
-        Monitor
-      </button>
-      <button class:active={route.view === "collections"} onclick={() => go({ view: "collections" })}>
-        Collections
-      </button>
-      <button class:active={route.view === "settings"} onclick={() => go({ view: "settings" })}>Settings</button>
+    <nav aria-label="Main">
+      {#each NAV as item (item.section)}
+        <button
+          class:active={section === item.section}
+          aria-current={section === item.section ? "page" : undefined}
+          onclick={() => go({ view: item.section })}
+        >
+          {item.label}
+        </button>
+      {/each}
     </nav>
   </header>
 
   {#if media && !media.available}
-    <div class="banner warn">
+    <div class="banner warn" role="alert">
       FFmpeg was not found, so videos can't be inspected or rendered. {media.message}
     </div>
   {/if}
 
-  <main>
-    {#if route.view === "library"}
+  <main id="main" tabindex="-1">
+    {#if advanced}
+      <nav class="crumbs" aria-label="Breadcrumb">
+        <button class="link" onclick={() => go({ view: "settings" })}>Settings</button><span aria-hidden="true">›</span>
+        <span>Advanced</span><span aria-hidden="true">›</span>
+        <span aria-current="page">{ADVANCED_LABEL[route.view]}</span>
+      </nav>
+    {/if}
+    {#if route.view === "workflows"}
+      <Workflows
+        {revision}
+        onOpen={(id, settings) => go({ view: "workflow", id, settings })}
+        onConnections={() => go({ view: "connections" })}
+      />
+    {:else if route.view === "workflow"}
+      <WorkflowDetail
+        id={route.id}
+        openSettings={route.settings}
+        {revision}
+        onBack={() => go({ view: "workflows" })}
+        onConnections={() => go({ view: "connections" })}
+        onReview={(id) => go({ view: "review", id })}
+      />
+    {:else if route.view === "activity"}
+      <Activity {revision} onConnections={() => go({ view: "connections" })} onReview={(id) => go({ view: "review", id })} />
+    {:else if route.view === "connections"}
+      <Connections {revision} />
+    {:else if route.view === "library"}
       <Library {revision} onOpen={(id) => go({ view: "asset", id })} onImport={importPaths} />
     {:else if route.view === "asset"}
       <AssetDetail
@@ -111,13 +175,18 @@
         onReview={(id) => go({ view: "review", id })}
       />
     {:else if route.view === "review"}
-      <Review id={route.id} {revision} onBack={() => go({ view: "monitor" })} />
+      <Review id={route.id} {revision} onBack={() => go({ view: "activity" })} />
     {:else if route.view === "monitor"}
-      <Monitor {revision} onReview={(id) => go({ view: "review", id })} onOpenAsset={(id) => go({ view: "asset", id })} />
+      <Monitor
+        {revision}
+        onReview={(id) => go({ view: "review", id })}
+        onOpenAsset={(id) => go({ view: "asset", id })}
+        onSettings={() => go({ view: "connections" })}
+      />
     {:else if route.view === "collections"}
       <Collections {revision} onReview={(id) => go({ view: "review", id })} />
     {:else}
-      <Settings {revision} />
+      <Settings {revision} onAdvanced={(to) => go({ view: to })} />
     {/if}
   </main>
 

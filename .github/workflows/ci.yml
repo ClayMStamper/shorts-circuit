@@ -29,6 +29,42 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
 
+  # The cloud runner's store, API and race tests need PostgreSQL; elsewhere they skip.
+  runner-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: shorts_runner_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/shorts_runner_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p shorts-runner -p shorts-cloud
+      - run: cargo test -p shorts-desktop --test cloud
+      - name: Build the runner image
+        run: docker build -f crates/runner/Dockerfile -t shorts-runner:ci .
+      - name: Check the deploy examples
+        working-directory: crates/runner/deploy
+        run: |
+          RUNNER_DOMAIN=runner.example.com POSTGRES_PASSWORD=x SHORTS_RUNNER_MASTER_KEY=x \
+            docker compose -f compose.yaml config --quiet
+          docker run --rm -e RUNNER_DOMAIN=runner.example.com -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2 caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+          docker run --rm shorts-runner:ci generate-key
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
@@ -73,3 +109,11 @@ jobs:
       - run: pnpm build
         working-directory: app
       - run: cargo clippy --manifest-path app/src-tauri/Cargo.toml --locked --all-targets -- -D warnings
+      # The release workflow's script and config aren't exercised until a release; catch typos here.
+      - name: Check release script and config
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/fetch-ffmpeg.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_.ToString() }; exit 1 }
+          Get-Content app/src-tauri/tauri.release.conf.json -Raw | ConvertFrom-Json | Out-Null

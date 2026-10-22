@@ -3,15 +3,23 @@
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type {
   AccountView,
+  ActivityView,
   AppError,
   AssetDetail,
   AssetSummary,
   AssetUpdate,
   CheckReport,
+  CloudStatus,
   CollectionView,
   ConnectProgress,
   EditPublication,
+  GetOriginal,
   ImportResult,
+  InstagramLogin,
+  InstagramPages,
+  InstagramStatus,
+  LinkedInOrganization,
+  LinkedInStatus,
   LibraryQuery,
   MatchSuggestion,
   MediaStatus,
@@ -27,9 +35,19 @@ import type {
   RuleActivityView,
   RuleInput,
   ScheduleInput,
+  SnapConnectProgress,
+  SnapStatus,
   TagCount,
+  TikTokAppInfo,
   TikTokStatus,
   VariantView,
+  NewWorkflow,
+  WorkflowDetailView,
+  WorkflowUpdate,
+  WorkflowView,
+  WorkflowsView,
+  YouTubeConnectProgress,
+  YouTubeStatus,
 } from "./types";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -59,6 +77,17 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 }
 
 export const api = {
+  // Workflows (the home screen) and activity
+  listWorkflows: () => call<WorkflowsView>("list_workflows"),
+  workflowDetail: (id: string) => call<WorkflowDetailView>("workflow_detail", { id }),
+  createWorkflow: (workflow: NewWorkflow) => call<WorkflowView>("create_workflow", { workflow }),
+  updateWorkflow: (id: string, update: WorkflowUpdate) => call<WorkflowView>("update_workflow", { id, update }),
+  deleteWorkflow: (id: string) => call<void>("delete_workflow", { id }),
+  checkForNewContent: () => call<WorkflowsView>("check_for_new_content"),
+  activity: (limit?: number) => call<ActivityView>("activity", { limit: limit ?? null }),
+  publishNow: (id: string) => call<PublicationView>("publish_now", { id }),
+  republish: (id: string) => call<PublicationView>("republish", { id }),
+
   // Library
   listAssets: (query: LibraryQuery) => call<AssetSummary[]>("list_assets", { query }),
   assetDetail: (id: string) => call<AssetDetail>("asset_detail", { id }),
@@ -120,6 +149,10 @@ export const api = {
 
   // TikTok new-post detection and matching
   tiktokStatus: () => call<TikTokStatus>("tiktok_status"),
+  tiktokAppInfo: () => call<TikTokAppInfo>("tiktok_app_info"),
+  tiktokSetApp: (clientKey: string, clientSecret: string) =>
+    call<TikTokStatus>("tiktok_set_app", { clientKey, clientSecret }),
+  tiktokClearApp: () => call<TikTokStatus>("tiktok_clear_app"),
   tiktokSetEnabled: (enabled: boolean) => call<TikTokStatus>("tiktok_set_enabled", { enabled }),
   tiktokConnect: () => call<void>("tiktok_connect"),
   tiktokFinishConnect: () => call<ConnectProgress>("tiktok_finish_connect"),
@@ -128,6 +161,55 @@ export const api = {
   matchSuggestions: () => call<MatchSuggestion[]>("match_suggestions"),
   confirmMatch: (videoId: string, assetId: string) => call<AssetSummary>("confirm_match", { videoId, assetId }),
   dismissMatch: (videoId: string, assetId: string) => call<void>("dismiss_match", { videoId, assetId }),
+
+  // YouTube publishing
+  youtubeStatus: () => call<YouTubeStatus>("youtube_status"),
+  youtubeSetClient: (clientId: string, clientSecret: string) =>
+    call<YouTubeStatus>("youtube_set_client", { clientId, clientSecret }),
+  youtubeClearClient: () => call<YouTubeStatus>("youtube_clear_client"),
+  youtubeConnect: (accountId: string | null) => call<void>("youtube_connect", { accountId }),
+  youtubeConnectProgress: () => call<YouTubeConnectProgress>("youtube_connect_progress"),
+  youtubeCancelConnect: () => call<void>("youtube_cancel_connect"),
+  youtubeDisconnect: (accountId: string) => call<YouTubeStatus>("youtube_disconnect", { accountId }),
+  youtubeSetPublicUploads: (accountId: string, isPublic: boolean) =>
+    call<YouTubeStatus>("youtube_set_public_uploads", { accountId, public: isPublic }),
+
+  // Instagram publishing
+  instagramStatus: () => call<InstagramStatus>("instagram_status"),
+  instagramFindPages: (accessToken: string) => call<InstagramPages>("instagram_find_pages", { accessToken }),
+  instagramConnect: (accessToken: string, login: InstagramLogin, pageId: string | null, accountId: string | null) =>
+    call<InstagramStatus>("instagram_connect", { accessToken, login, pageId, accountId }),
+  instagramDisconnect: (accountId: string) => call<InstagramStatus>("instagram_disconnect", { accountId }),
+
+  // LinkedIn publishing
+  linkedinStatus: () => call<LinkedInStatus>("linkedin_status"),
+  linkedinFindPages: (accessToken: string) => call<LinkedInOrganization[]>("linkedin_find_pages", { accessToken }),
+  linkedinConnect: (accessToken: string, page: string, accountId: string | null) =>
+    call<LinkedInStatus>("linkedin_connect", { accessToken, page, accountId }),
+  linkedinDisconnect: (accountId: string) => call<LinkedInStatus>("linkedin_disconnect", { accountId }),
+
+  // Snapchat Spotlight publishing
+  snapchatStatus: () => call<SnapStatus>("snapchat_status"),
+  snapchatSetClient: (clientId: string, clientSecret: string, redirectUri: string) =>
+    call<SnapStatus>("snapchat_set_client", { clientId, clientSecret, redirectUri }),
+  snapchatClearClient: () => call<SnapStatus>("snapchat_clear_client"),
+  snapchatConnect: (accountId: string | null) => call<void>("snapchat_connect", { accountId }),
+  snapchatConnectProgress: () => call<SnapConnectProgress>("snapchat_connect_progress"),
+  snapchatCancelConnect: () => call<void>("snapchat_cancel_connect"),
+  snapchatFinishWithCode: (pasted: string) => call<SnapStatus>("snapchat_finish_with_code", { pasted }),
+  snapchatCheckConnection: (accountId: string) => call<SnapStatus>("snapchat_check_connection", { accountId }),
+  snapchatDisconnect: (accountId: string) => call<SnapStatus>("snapchat_disconnect", { accountId }),
+
+  openLink: (url: string) => call<void>("open_link", { url }),
+
+  // Cloud runner (optional)
+  cloudStatus: () => call<CloudStatus>("cloud_status"),
+  cloudConfigure: (url: string, token: string) => call<CloudStatus>("cloud_configure", { url, token }),
+  cloudSetEnabled: (enabled: boolean) => call<CloudStatus>("cloud_set_enabled", { enabled }),
+  cloudForget: () => call<CloudStatus>("cloud_forget"),
+  cloudSyncNow: () => call<CloudStatus>("cloud_sync_now"),
+  sendToCloud: (id: string) => call<PublicationView>("send_to_cloud", { id }),
+  takeBackFromCloud: (id: string) => call<PublicationView>("take_back_from_cloud", { id }),
 
   // Monitor
   monitor: () => call<MonitorView>("monitor"),
@@ -138,6 +220,14 @@ export const api = {
   preferences: () => call<Preferences>("preferences"),
   updatePreferences: (update: PreferencesUpdate) => call<Preferences>("update_preferences", { update }),
   checkWatchFolder: () => call<Preferences>("check_watch_folder"),
+  /** Opens a waiting TikTok post and expects its downloaded video. */
+  getOriginal: (assetId: string) => call<GetOriginal>("get_original", { assetId }),
+  cancelGetOriginal: (assetId: string) => call<void>("cancel_get_original", { assetId }),
+  /** Runs the workflows for an item that never reached them; returns publications created. */
+  sendToWorkflows: (assetId: string) => call<number>("send_to_workflows", { assetId }),
+  /** "Pick file…": attaches a chosen video to a waiting item. */
+  attachOriginal: (assetId: string, path: string) => call<void>("attach_original", { assetId, path }),
+  defaultDownloadsFolder: () => call<string | null>("default_downloads_folder"),
   mediaStatus: () => call<MediaStatus>("media_status"),
   openFolder: (path: string) => call<void>("open_folder", { path }),
 };

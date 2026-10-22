@@ -1,0 +1,60 @@
+# Cloud runner with PostgreSQL and Caddy (automatic HTTPS) on one small VPS.
+# Copy this folder to the server, create `.env` next to it (see docs/cloud-runner.md), then:
+#   docker compose up -d
+# Secrets come from `.env`, which must never be committed.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: shorts
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: shorts_runner
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shorts -d shorts_runner"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  runner:
+    image: ${RUNNER_IMAGE:-shorts-runner:latest}
+    restart: unless-stopped
+    # Time to release running jobs with their checkpoints on shutdown.
+    stop_grace_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://shorts:${POSTGRES_PASSWORD}@postgres:5432/shorts_runner
+      SHORTS_RUNNER_MASTER_KEY: ${SHORTS_RUNNER_MASTER_KEY:?set SHORTS_RUNNER_MASTER_KEY in .env}
+      SHORTS_RUNNER_OLD_MASTER_KEYS: ${SHORTS_RUNNER_OLD_MASTER_KEYS:-}
+      SHORTS_RUNNER_OVERDUE: ${SHORTS_RUNNER_OVERDUE:-15}
+    volumes:
+      - media:/var/lib/shorts-runner
+    # Only Caddy talks to it; nothing is published on the host.
+    expose:
+      - "8787"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - runner
+    environment:
+      RUNNER_DOMAIN: ${RUNNER_DOMAIN:?set RUNNER_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  postgres:
+  media:
+  caddy-data:
+  caddy-config:

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shorts_domain::platform::full_caption;
+use shorts_domain::youtube;
 use shorts_domain::{
     ConnectedAccount, MediaProperties, Platform, Publication, PublicationId, ValidationIssue,
 };
@@ -64,7 +65,6 @@ pub struct ManualHandoff {
 }
 
 const MANIFEST_FORMAT: u32 = 1;
-const YOUTUBE_TITLE_MAX: usize = 100;
 
 impl ManualHandoff {
     pub fn new(root: impl Into<PathBuf>) -> Self {
@@ -103,7 +103,7 @@ impl ManualHandoff {
             &content.hashtags,
         );
         let title =
-            (p.platform() == Platform::YoutubeShorts).then(|| youtube_title(&content.caption));
+            (p.platform() == Platform::YoutubeShorts).then(|| youtube::title(&content.caption));
         let manifest = PackageManifest {
             format: MANIFEST_FORMAT,
             publication_id: p.id(),
@@ -201,16 +201,6 @@ fn slug(title: &str) -> String {
     } else {
         out
     }
-}
-
-fn youtube_title(caption: &str) -> String {
-    let first = caption
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim();
-    let first = if first.is_empty() { "Short" } else { first };
-    first.chars().take(YOUTUBE_TITLE_MAX).collect()
 }
 
 fn posting_steps(req: &PackageRequest<'_>, m: &PackageManifest, caption: &str) -> String {
@@ -313,15 +303,5 @@ mod tests {
         assert_eq!(slug("Sourdough: Day 3 (final!)"), "sourdough-day-3-final");
         assert_eq!(slug("日本語"), "video");
         assert!(slug(&"word ".repeat(30)).len() <= 40);
-    }
-
-    #[test]
-    fn youtube_titles_come_from_the_first_caption_line() {
-        assert_eq!(
-            youtube_title("\nBest bread ever\nMore text"),
-            "Best bread ever"
-        );
-        assert_eq!(youtube_title(""), "Short");
-        assert_eq!(youtube_title(&"x".repeat(150)).chars().count(), 100);
     }
 }

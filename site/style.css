@@ -1,0 +1,55 @@
+:root {
+  --bg: #fbfaf8;
+  --fg: #1d1d1f;
+  --muted: #5f5f66;
+  --link: #1f5fbf;
+  --rule: #e4e2dd;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a;
+    --fg: #ececee;
+    --muted: #a3a3ab;
+    --link: #8ab4ff;
+    --rule: #2c2c31;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+main {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 2.5rem 1rem 4rem;
+}
+
+h1 { font-size: 1.9rem; line-height: 1.2; margin: 0.25rem 0 0.5rem; }
+h2 { font-size: 1.15rem; margin-top: 2rem; border-top: 1px solid var(--rule); padding-top: 1.25rem; }
+a { color: var(--link); }
+code { font-size: 0.9em; overflow-wrap: anywhere; }
+li { margin: 0.35rem 0; }
+.meta, .crumbs { color: var(--muted); font-size: 0.9rem; }
+.error { color: #b3261e; }
+@media (prefers-color-scheme: dark) { .error { color: #ff8a80; } }
+.copy { display: flex; gap: 0.5rem; align-items: flex-start; }
+.copy textarea {
+  flex: 1;
+  min-width: 0;
+  font: 0.9rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  padding: 0.5rem;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  resize: vertical;
+  overflow-wrap: anywhere;
+}
+.copy button { font: inherit; padding: 0.45rem 1rem; cursor: pointer; }
