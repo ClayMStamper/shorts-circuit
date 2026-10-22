@@ -2,9 +2,10 @@
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use shorts_domain::workflow::WorkflowStatus;
 use shorts_domain::{
-    ConnectedAccount, MediaProperties, NextAction, Permission, Platform, PublicationState,
-    PublishAccess, RenderRecipe, RuleOutput, ValidationIssue,
+    ConnectedAccount, ExecutionOwner, MediaProperties, NextAction, Permission, Platform,
+    PostingMode, PublicationState, PublishAccess, RenderRecipe, RuleOutput, ValidationIssue,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -172,6 +173,12 @@ pub enum Action {
     ExportPackage,
     /// Sign the destination account in again (Settings).
     Reconnect,
+    /// Hand it to the cloud runner, which posts it while this computer is off.
+    SendToCloud,
+    /// Take it back from the cloud runner to this computer.
+    TakeBack,
+    /// Post the same video and copy to the same destination again (or after a Skip).
+    Republish,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -208,7 +215,21 @@ pub struct PublicationView {
     pub progress_text: Option<String>,
     /// What happens next or what the user needs to do, in plain words.
     pub status_text: String,
+    /// The short status pill: "Published", "Processing 40%", "Waiting for review", …
+    pub status_label: String,
+    /// The pill's colour: `good`, `info`, `warn`, `bad` or `muted`.
+    pub tone: &'static str,
+    /// Who approved the current approval: `owner`, `workflow:<name>` or `rule:<name>`.
+    pub approved_by: Option<String>,
+    /// While waiting for review: what would stop it from being approved.
+    pub blockers: Vec<String>,
+    /// A YouTube upload that ended up private (on the channel, but not public).
+    pub published_private: bool,
     pub actions: Vec<Action>,
+    /// Who runs it: this computer, or the cloud runner.
+    pub owner: ExecutionOwner,
+    /// While the cloud runner owns it: a problem reaching the runner, if any.
+    pub cloud_note: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -307,8 +328,18 @@ pub struct RuleItemView {
     pub caption: String,
     pub duration_ms: Option<u64>,
     pub source_posted_at: Option<DateTime<Utc>>,
+    /// The original post (e.g. its TikTok link), when known; https only.
+    pub source_url: Option<String>,
+    /// "Get original" was clicked: a matching download is expected until then.
+    pub expecting_original_until: Option<DateTime<Utc>>,
+    /// Why a download wasn't taken for this post, e.g. a different length.
+    pub download_note: Option<String>,
     /// In the collection, but its original file hasn't arrived yet.
     pub waiting_for_media: bool,
+    /// Why nothing has been created for it yet, e.g. waiting for its TikTok caption.
+    pub waiting_reason: Option<String>,
+    /// When it entered the library.
+    pub added_at: DateTime<Utc>,
     /// One per destination, with state, status text and available actions.
     pub publications: Vec<PublicationView>,
 }
@@ -334,6 +365,86 @@ pub struct UnattendedView {
     pub available: bool,
     pub unavailable_reason: Option<String>,
     pub enabled_at: Option<DateTime<Utc>>,
+}
+
+/// One workflow row: "TikTok → YouTube Shorts · Channel".
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowView {
+    pub id: String,
+    pub name: String,
+    pub rule_id: String,
+    pub account_id: String,
+    pub account_name: String,
+    pub platform: Platform,
+    pub platform_name: &'static str,
+    pub source_name: &'static str,
+    /// Active (not paused).
+    pub enabled: bool,
+    pub auto_publish: bool,
+    /// The account can publish automatically, so Auto Publish can be on.
+    pub auto_publish_available: bool,
+    pub status: WorkflowStatus,
+    /// The status in words, with the fix when there is one.
+    pub status_text: String,
+    /// What the workflow does, in plain words.
+    pub banner: String,
+    pub rights_confirmed: bool,
+    pub posting: PostingMode,
+    pub share_to_feed: Option<bool>,
+    pub caption_template: String,
+    pub hashtags: Vec<String>,
+    pub effective_from: DateTime<Utc>,
+    /// YouTube: uploads stay private until the channel is switched to public uploads.
+    pub private_only: bool,
+    /// Items it has handled.
+    pub item_count: u32,
+    pub created_at: DateTime<Utc>,
+}
+
+/// "TikTok → Instagram Reels" for a connected account without a workflow.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowSuggestion {
+    pub account_id: String,
+    pub account_name: String,
+    pub platform: Platform,
+    pub platform_name: &'static str,
+    pub name: String,
+}
+
+/// Where content comes from.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceView {
+    pub name: &'static str,
+    pub watch_folder: Option<String>,
+    pub watch_checked_at: Option<DateTime<Utc>>,
+    /// TikTok new-post detection is on and signed in.
+    pub tiktok_connected: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowsView {
+    pub workflows: Vec<WorkflowView>,
+    pub suggestions: Vec<WorkflowSuggestion>,
+    pub source: SourceView,
+}
+
+/// A workflow and its content, newest first.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowDetailView {
+    pub workflow: WorkflowView,
+    pub items: Vec<RuleItemView>,
+}
+
+/// Every item flowing through, newest first.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityView {
+    pub items: Vec<RuleItemView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

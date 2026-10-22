@@ -9,6 +9,12 @@ use serde::Serialize;
 )]
 pub enum AppEvent {
     LibraryChanged,
+    /// A waiting TikTok post got its original file (from the downloads folder or picked by
+    /// hand).
+    OriginalAttached {
+        asset_id: String,
+        title: String,
+    },
     Imported {
         asset_id: String,
         duplicate: bool,
@@ -39,6 +45,10 @@ pub enum AppEvent {
     InstagramChanged,
     /// A LinkedIn page was connected or disconnected.
     LinkedInChanged,
+    /// A Snapchat profile was connected or disconnected, or a sign-in progressed.
+    SnapchatChanged,
+    /// Cloud mode was configured, or a sync with the cloud runner finished.
+    CloudChanged,
     /// The watch folder was listed (on start, on its timer, or "Check now").
     WatchFolderChecked,
     /// A file might be the original of a pending TikTok post (`asset_id` is the file's asset

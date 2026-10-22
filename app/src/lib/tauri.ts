@@ -11,6 +11,8 @@ export function inTauri(): boolean {
 
 /** A URL the webview can load for a local file (video preview, thumbnails). */
 export function fileUrl(path: string): string {
+  // Already a URL (the browser preview's mock data).
+  if (/^(data:|https?:|blob:)/.test(path)) return path;
   if (!inTauri()) return `file://${path}`;
   return convertFileSrc(path);
 }
