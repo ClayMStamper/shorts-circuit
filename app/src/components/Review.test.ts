@@ -51,6 +51,11 @@ function review(overrides: Partial<ReviewView> = {}): ReviewView {
       owner: "desktop",
       cloudNote: null,
       updatedAt: "2026-10-30T12:00:00Z",
+      statusLabel: "Waiting for review",
+      tone: "warn",
+      approvedBy: null,
+      blockers: [],
+      publishedPrivate: false,
     },
     account: {
       id: "acc1",

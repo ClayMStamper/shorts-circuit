@@ -479,19 +479,6 @@ impl PgStore {
         Ok(resumed)
     }
 
-    /// Instagram accounts with cloud-owned publications still to publish, whose tokens the
-    /// runner keeps renewed.
-    pub async fn instagram_accounts_in_use(&self) -> DbResult<Vec<AccountId>> {
-        let ids: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT DISTINCT p.account_id FROM publications p JOIN accounts a \
-             ON a.id = p.account_id WHERE p.owner = 'cloud' AND p.state <> 'published' \
-             AND a.platform = 'instagram_reels'",
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(ids.into_iter().map(AccountId::from_uuid).collect())
-    }
-
     pub async fn insert_attempt(&self, attempt: &PublishAttempt) -> DbResult<()> {
         sqlx::query(
             "INSERT INTO attempts (id, publication_id, record, updated_at) VALUES ($1, $2, $3, $4)",

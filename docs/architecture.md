@@ -44,7 +44,7 @@ application lacks API access.
 |---|---|
 | TikTok (source) | The Display API provides metadata, share links, and embeds, but no source-video download field. Import original files or authorized exports; a saved TikTok URL can remain a library item awaiting media. oEmbed covers link metadata without auth. The optional new-post detector (below) uses only `user.info.basic` and `video.list`. |
 | YouTube Shorts | Upload through the YouTube Data API using resumable uploads. Validate the asset against Shorts format rules; uploading a video and being classified as a Short are distinct concerns. Implemented first (Increment 3, below). |
-| Instagram Reels | Professional accounts publish through a media-container workflow (Instagram Login, no linked Facebook Page needed). Model container creation, processing, and publication as separate steps. |
+| Instagram Reels | Professional accounts linked to a Facebook Page publish through a media-container workflow (Instagram API with Facebook Login, which is what allows uploading the file itself). Model container creation, processing, and publication as separate steps. |
 | Snapchat Spotlight | The Public Profile API supports Spotlight publication but requires application allowlisting. Verify access before enabling automation; otherwise offer export and manual handoff. Implemented as the fourth connector (below); unverified against a real account. |
 | LinkedIn | Upload media through the Videos API, then reference it in a Posts API request. Check member vs organization permissions. Feed placement is outside the app's control. |
 
@@ -104,30 +104,129 @@ As implemented (Increment 2):
 Approval binds to an **immutable publication revision**. Any change to approved media, copy, or
 destination invalidates that approval and returns the publication to review.
 
+### Workflows UX (owner decision, 21 October 2026)
+
+After the first real upload the owner found the collection/rule/review flow had too many manual
+steps (render, permissions, approving each post, re-typing captions) spread over too many
+screens. **Decision: content flows automatically by default.** Connect accounts once, set up the
+source, and every new video is published to every connected destination with its source
+caption and hashtags. Reviewing and customizing are optional advanced settings. The reference is
+Repurpose.io's Workflows page.
+
+- **A workflow is "source → one destination account"**, e.g. "TikTok → YouTube Shorts". The
+  source is the owner's own videos: the watch folder, plus TikTok new-post detection for
+  captions when connected. A workflow is a thin record (`workflows`, migration 0007) over the
+  existing model, not a replacement: one `CollectionRule` with a single destination in the
+  *source collection* (the collection the watch folder routes into; setup creates "Source
+  videos" when there is none). At most one workflow per source collection and account.
+  - *Auto Publish* on = an `UnattendedGrant` for that collection and account. Off = no grant,
+    so publications wait at `AwaitingApproval` ("require review" in the settings drawer is the
+    same switch, worded from the other side). This restores the earlier behaviour exactly.
+  - *Active / Inactive* = the rule's `enabled`. Reactivating restarts it from now
+    (`effective_from`), so pausing never floods destinations with what arrived meanwhile.
+  - *Needs reconnect* = the account's capability record asks for a reconnect, or a publication
+    for it waits at `NeedsAuthentication`. The fix is one click (Reconnect).
+  - The workflow keeps its *settings*: posting (`as soon as possible`, the default, or the
+    posting slots), caption template (default `{caption}`), extra hashtags, destination options
+    (Instagram share to feed; YouTube public/private is the channel's setting) and the
+    effective-from date (the rule's).
+- **Rights.** Creating a workflow asks once: "I own or have the rights to content from this
+  source". The confirmation is stored on the workflow; when the workflow's rule fires for an
+  item whose video or audio permission is still *unknown*, both are recorded as granted with the
+  note "Rights confirmed in workflow <name>". A recorded *denied* is never overwritten, so such
+  an item still waits for review.
+- **Zero-touch pipeline.** When a workflow's rule fires: the default variant is rendered (for
+  every rule-created publication, not only unattended ones, so review is instant too); copy
+  comes from the source (TikTok post caption when matched, else a sidecar `.txt`/`.json` next
+  to the file, else a title from the file name); each destination's copy is fitted to its limits
+  (`shorts_domain::copy::fit`: YouTube refuses `<`/`>` and uses the first line as title, Snapchat
+  is cut to 160 characters, Instagram keeps ≤ 30 hashtags, LinkedIn escaping stays in the
+  adapter) by dropping trailing hashtags first, then shortening the text with "…"; the posting
+  time is now (or the next free slot; no free slot falls back to now). Under Auto Publish the
+  workflow approves the publication's current revision once it is rendered and the review shows
+  no issues, recorded as approved by `workflow:<name>`; an "as soon as possible" time that
+  passed while rendering is moved to now first, so the overdue policy doesn't expire it.
+  Anything the review flags (too long for Spotlight, a denied permission) waits with the reason
+  and an Approve / Skip choice.
+- **The invariant still holds.** Every approval, by the owner or a workflow, binds to one
+  immutable revision; editing media, copy or destination makes a new revision and drops it. With
+  Auto Publish on, the workflow approves the new revision again only if it created the
+  publication and hasn't approved it before (`rule_firings.auto_approved_at`), so an edit made by
+  hand goes back to the owner.
+- **Navigation.** Workflows (home), Activity (every item, newest first, with each destination's
+  status), Connections (one card per platform plus the source), Settings (rarely used options).
+  Library, Collections, Review and Monitor stay reachable under Settings → Advanced. A first-run
+  wizard (source → destinations → suggested workflows) shows until a workflow exists and can be
+  reopened from Workflows.
+- **Turning Auto Publish on** for a workflow also approves the items it is holding for review
+  (the revisions it created), since that is what the owner just asked for.
+- **Small rules.** A YouTube upload that stays private shows "Uploaded (private)" with a hint to
+  make it public in YouTube Studio instead of "Published". Each connection problem shows a single
+  next action.
+
 ### Automatic intake
 
 Originals come in through the watch folder, typically a folder the phone or editor syncs to.
 TikTok is used at most to notice that a post exists:
 
 - **New-post detection** (optional, off by default, behind a setting). A poller in the desktop
-  app calls the Display API with a token obtained through the OAuth broker, which holds the
-  TikTok client secret and does code exchange, refresh and revoke. The desktop starts sign-in
-  at `<broker>/v1/tiktok/connect?state&challenge` and collects tokens from `/v1/tiktok/claim`
-  with the verifier behind the challenge. Tokens are kept in the OS credential store.
+  app calls the Display API. Tokens come from one of two sign-ins, both kept in the OS
+  credential store:
+  - **Direct** (default since 21 October 2026, `shorts_adapters::tiktok_oauth`). Researched in
+    TikTok's "Login Kit for Desktop" and "Manage user access tokens" pages (21 October 2026):
+    desktop apps register a redirect on `localhost`/`127.0.0.1` with an explicit (or `*`) port
+    and must use PKCE (`code_challenge_method=S256`), but the token endpoint
+    (`open.tiktokapis.com/v2/oauth/token/`) still takes `client_secret` alongside the
+    `code_verifier`. So there is no secret-free public-client flow; instead the owner pastes
+    their own TikTok app's client key and secret (OS credential store, `tiktok_app`), exactly
+    like the Snap OAuth app, and the desktop listens on `http://127.0.0.1:47616/callback/`,
+    exchanges the code and refreshes tokens itself. No broker or paste page is needed.
+    *Assumption to confirm:* TikTok's desktop page describes the challenge as the hex SHA-256
+    of the verifier (not RFC 7636's base64url); hex is the default and
+    `SHORTS_TIKTOK_PKCE=base64url` switches. A fixed port is used rather than `*` in case
+    wildcard ports aren't honoured.
+  - **Broker** (fallback when `SHORTS_BROKER_URL` is set and no app is pasted). The OAuth
+    broker holds the client secret and does code exchange, refresh and revoke; the desktop
+    starts sign-in at `<broker>/v1/tiktok/connect?state&challenge` and collects tokens from
+    `/v1/tiktok/claim` with the verifier behind the challenge. Sign-ins made through it keep
+    refreshing through it.
 - Each new post becomes an asset awaiting media with title, caption, share URL, post time,
   duration and a cached copy of the cover image (`tiktok_posts`). Nothing else is downloaded.
 - When a file is imported, files whose duration is within 1.5 s of a pending post and that
-  arrived within 72 hours of it are suggested as its original. Only the user's confirmation
-  merges them: the file's asset takes the post's details and collections (so rules fire) and
-  the placeholder is removed. Dismissed pairs aren't suggested again.
-- Without a configured TikTok developer app the feature reports itself unavailable with the
-  next step (see `docs/human-scope.md`).
+  arrived within 72 hours of it are suggested as its original. Confirming merges them: the
+  file's asset takes the post's details (its caption wins over a sidecar) and collections (so
+  rules fire) and the placeholder is removed. Dismissed pairs aren't suggested again. Once a
+  workflow exists, unambiguous pairs (the post's only candidate, which is no other post's
+  candidate) are confirmed automatically after each import and TikTok check; ambiguous ones
+  still wait for the user.
+- **Caption source for workflows.** The matched TikTok post's caption and hashtags; else a
+  sidecar next to the file (`<name>.json` with `caption`/`description`/`text`/`title` and
+  `hashtags`/`tags`, or `<name>.txt`), stored as the asset's notes; else a title from the file
+  name. While TikTok detection is connected, a workflow holds a new file that has no caption of
+  its own for up to two hours (`CAPTION_WAIT_MINUTES`) so its post can be matched first; each
+  watch-folder rescan and TikTok check re-runs rules for recent items, so it goes out once the
+  wait ends either way.
+- Without a TikTok developer app (pasted, or on a configured broker) the feature reports itself
+  unavailable with the next step (see `docs/human-scope.md`).
 - The watch folder and the TikTok poller both show when they last checked and offer "Check
   now". The watch folder also relists itself every 10 minutes, since sync clients don't always
   raise file events.
 - No media fetcher exists: originals never come from TikTok. If official access to original
   files ever appears, a fetcher would attach the file to the awaiting item through the normal
   import path (`import_file` with `into`), leaving matching and rules unchanged.
+
+#### Originals downloaded from TikTok
+
+- The downloads folder can be watched in a second mode (`WatchKind::Downloads`): only files
+  modified after watching starts are considered, and a video is imported only when
+  `pick_post_for_download` attributes it to a pending TikTok post. It is then attached to that
+  post's waiting item (`import_file(path, into)`), keeping its caption, link and collections,
+  and the post is marked matched. Anything else is left in place, unimported.
+- "Get original" (`App::expect_original`) opens the post and remembers it for 30 minutes; a
+  requested post whose duration fits wins, even if it is older than the 72-hour window that
+  unrequested downloads (and the watch folder's matching) use. Without a request, the file must
+  fit exactly one pending post.
+- The owner clicks TikTok's own "Download video"; the app never automates TikTok's site.
 
 ### Media pipeline
 
@@ -267,34 +366,78 @@ publish are separate operations so interrupted work resumes at the correct step.
 
 ### Instagram Reels connector (Increment 3, second slice)
 
-- **Sign-in.** The owner pastes a long-lived token generated in their Meta app's dashboard
-  (Instagram → API setup with Instagram login → Generate token) for a professional account
-  added to the app. No redirect address, hosting or app secret is needed. `GET /me` identifies
-  the account (`user_id`, `username`, `account_type`); personal accounts are refused with the
-  next step. The token and user id live in the OS credential store (`instagram:<account id>`).
-- **Renewal.** Long-lived tokens last 60 days and can be renewed with themselves once a day
-  old (`GET /refresh_access_token?grant_type=ig_refresh_token`). The connector renews a token
-  when it has under 20 days left, on use and every 6 hours while the app runs. An expired or
-  refused token moves publications to `NeedsAuthentication`; pasting a new token for the same
-  account reconnects it and resumes them. (A browser OAuth flow would need an HTTPS redirect
-  and the app secret, i.e. the broker; it can be added when the app is shared.)
-- **Upload.** `POST /{ig-user-id}/media` with `media_type=REELS`, `upload_type=resumable`,
-  the caption and `share_to_feed=true` creates a container; the file goes to the container's
-  `rupload.facebook.com/ig-api-upload/<version>/<container>` address in one request
-  (`Authorization: OAuth`, `offset: 0`, `file_size`). Re-sending replaces the bytes, so an
-  interrupted upload simply repeats; a checkpoint older than 23 hours opens a new container
-  (containers expire after 24). No public video URL or staging storage is needed.
+Switched to Facebook Login on 21 October 2026, after the first real test: with Instagram Login
+(`graph.instagram.com`) Instagram refused the resumable container ("The parameter video_url is
+required"). Meta's resumable-upload docs offer uploading the file itself only to apps with
+Facebook Login for Business; the alternative, a public `video_url`, would need hosting.
+
+- **Sign-in.** The Instagram professional account is linked to a Facebook Page; the owner's Meta
+  app uses "API setup with Facebook login". The owner generates a user token for that app in
+  Graph API Explorer (`instagram_basic`, `instagram_content_publish`, `pages_show_list`,
+  `pages_read_engagement`, `business_management`), extends it to a long-lived token in the
+  Access Token Debugger and pastes it. No redirect address, hosting or app secret is needed;
+  the app stays in Development mode with the owner as its admin, so no App Review.
+- **Checks, one next action each.** `GET /debug_token?input_token=<token>` with the token
+  itself as caller (allowed when its user is a developer of the app) gives the granted scopes
+  and expiry; if Meta refuses that, `GET /me/permissions` gives the scopes and the owner is told
+  how to read the expiry in the Access Token Debugger. Missing scopes are named (the four
+  above; `business_management` is only mentioned when no Page is found, since only Pages in a
+  business portfolio need it). A token with under a day left is short-lived: extend it. An
+  `IGAA…` token is an Instagram Login token. `GET /me/accounts?fields=name,access_token,
+  instagram_business_account{id,username}` lists the Pages: none → choose the Page when
+  generating the token; none with `instagram_business_account` → link it in the Page's
+  settings → Linked accounts. One linked Page is picked automatically; with several the owner
+  picks.
+- **Stored.** The chosen Page's access token (it doesn't expire when derived from a long-lived
+  user token, so there is no renewal), the `instagram_business_account` id, the username and
+  the Page's name live in the OS credential store (`instagram:<account id>`, with
+  `login: facebook_login`); the user token is not kept. A token Meta ends anyway (190) moves
+  publications to `NeedsAuthentication` with Reconnect; pasting a new token (matched to the
+  same account by Instagram id or username) resumes them.
+- **Instagram Login fallback.** Still selectable as the connection type (`GET
+  graph.instagram.com/me` identifies the account), but such accounts can't upload files, so
+  their capability record is `ManualOnly` with `Reconnect` ("reconnect with Facebook login")
+  and publications use export packages. Accounts connected that way before the switch (grants
+  without `login`) get that record on start; their workflows and Auto Publish grants stay and
+  publish again once reconnected. No schema migration: grants and the per-account status live
+  in the credential store and settings JSON, read with defaults.
+- **Upload.** `POST graph.facebook.com/<version>/{ig-user-id}/media` with
+  `media_type=REELS`, `upload_type=resumable`, the caption and `share_to_feed` (Bearer Page
+  token) creates a container; the file goes to
+  `rupload.facebook.com/ig-api-upload/<version>/<container>` (`Authorization: OAuth <token>`,
+  `offset`, `file_size`). Before each send the adapter reads the container's
+  `video_status.uploading_phase.bytes_transferred` and sends from that offset, so an
+  interrupted upload continues and one that fully arrived isn't sent again; if the field can't
+  be read the whole file is sent from 0 (re-sending replaces the bytes). A checkpoint older than
+  23 hours opens a new container (containers expire after 24).
 - **Processing and publish.** The container's `status_code` is polled until `FINISHED`
   (`ERROR`/`EXPIRED` fail the attempt). Publish checks `content_publishing_limit` (100 API
   posts per 24 hours), calls `media_publish`, then reads the reel's permalink. Reconcile reads
   the container: `PUBLISHED` → the reel is found among the account's recent media by caption
-  digest; `FINISHED` → nothing was published, so publishing again is safe.
-- **Errors.** Graph error codes 190/102/463/467 ask for a reconnect, 10/200–299 for a
-  reconnect with the publishing permission, 4/17/32/613/80002 (and 429) pause 15 minutes, and
-  subcode 2207042 (posting limit) pauses an hour. Transient or 5xx errors retry.
+  digest; `FINISHED` → nothing was published, so publishing again is safe. All on
+  `graph.facebook.com`.
+- **Errors.** Graph codes 190/102/463/467 ask for a reconnect, with code 190's subcode named
+  (458 app removed, 459 checkpoint, 460 password changed, 463 expired, 464 unconfirmed user,
+  467 invalidated, 492 no longer a Page admin); 10/200–299 ask for a reconnect with the
+  permissions named; 4/17/32/613/80002 (and 429) pause 15 minutes; subcode 2207042 (posting
+  limit) pauses an hour. Transient or 5xx errors retry; other 4xx answers stop at
+  `NeedsUserAction` (Retry there continues once fixed).
+- **Cloud runner.** The credential carries `login`; the runner uses Page tokens as they are and
+  asks for a reconnect on the desktop for Instagram Login credentials. It no longer renews
+  Instagram tokens.
+- **Verified vs assumed** (no network access to Meta from the build; checked against the docs
+  as quoted by the owner and Meta's public pages): container creation, the rupload address and
+  its headers, Facebook Login being required for resumable uploads, `/me/accounts` fields and
+  Page tokens not expiring are from Meta's docs. Assumed until the smoke test: the exact shape
+  of `video_status.uploading_phase.bytes_transferred` on an Instagram container (only seen in a
+  forum report), `/debug_token` accepting the user token as caller for an app admin, Bearer
+  headers on `graph.facebook.com`, and the Instagram Login `user_id` equalling the
+  `instagram_business_account` id (the username is matched as well).
 - **Limits** (`shorts_domain::instagram`): MP4/MOV, 3 s to 15 min, 300 MB, any aspect ratio
   between 0.01:1 and 10:1, caption ≤ 2,200 characters, ≤ 30 hashtags and ≤ 20 @mentions. The
   Graph API version defaults to `v24.0` (`SHORTS_INSTAGRAM_API_VERSION` overrides it).
+- **Later.** The same Page connection could publish Facebook Reels (`/{page-id}/video_reels`);
+  not in scope.
 
 ### LinkedIn Company Page connector (Increment 3, third slice)
 

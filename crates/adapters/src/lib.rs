@@ -25,6 +25,7 @@ pub mod manual;
 pub mod registry;
 pub mod snapchat;
 pub mod tiktok;
+pub mod tiktok_oauth;
 pub mod youtube;
 
 pub use contract::{

@@ -146,6 +146,11 @@ describe("Monitor", () => {
     owner: "desktop",
     cloudNote: null,
     updatedAt: "2026-10-30T12:00:00Z",
+    statusLabel: "Uploaded (private)",
+    tone: "warn",
+    approvedBy: null,
+    blockers: [],
+    publishedPrivate: true,
   };
 
   function monitor(publications: PublicationView[]) {
