@@ -87,13 +87,14 @@ const ACTION_LABELS: Record<Action, string> = {
   publishNow: "Post now",
   cancel: "Cancel",
   retry: "Retry",
-  resolveUserAction: "Resolved, continue",
+  resolveUserAction: "Retry",
   confirmPosted: "Mark as posted",
   resolveOutcome: "Record outcome",
   exportPackage: "Export package",
   reconnect: "Reconnect…",
   sendToCloud: "Post from the cloud",
   takeBack: "Take back",
+  republish: "Republish",
 };
 
 export function actionLabel(action: Action): string {
@@ -167,4 +168,40 @@ export function parseHashtags(input: string): string[] {
 /** The detected IANA timezone of this machine. */
 export function systemTimeZone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+/** "just now", "5 minutes ago", "15 hours ago", "3 days ago" (relative to `now`). */
+export function timeAgo(iso: string, now: Date = new Date()): string {
+  const seconds = Math.round((now.getTime() - new Date(iso).getTime()) / 1000);
+  if (seconds < 45) return "just now";
+  const units: Array<[number, string]> = [
+    [60, "minute"],
+    [3600, "hour"],
+    [86400, "day"],
+  ];
+  let value = Math.max(1, Math.floor(seconds / 60));
+  let unit = "minute";
+  for (const [size, name] of units) {
+    const v = Math.floor(seconds / size);
+    if (v >= 1) {
+      value = v;
+      unit = name;
+    }
+  }
+  if (unit === "day" && value > 30) return formatDateTime(iso);
+  return `${value} ${unit}${value === 1 ? "" : "s"} ago`;
+}
+
+/** "Approved by you", "Approved by workflow TikTok → YouTube Shorts", … */
+export function approverLabel(by: string | null): string | null {
+  if (!by) return null;
+  if (by === "owner") return "Approved by you";
+  if (by.startsWith("workflow:")) return `Approved by workflow ${by.slice("workflow:".length)}`;
+  if (by.startsWith("rule:")) return `Approved by rule ${by.slice("rule:".length)}`;
+  return `Approved by ${by}`;
+}
+
+/** A short date such as "21 Oct 2026". */
+export function formatDate(iso: string): string {
+  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric" }).format(new Date(iso));
 }

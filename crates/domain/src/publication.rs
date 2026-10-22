@@ -174,6 +174,24 @@ pub struct RevisionContent {
     /// Normalized: no leading `#`, no whitespace, unique, in the user's order.
     pub hashtags: Vec<String>,
     pub destination: Destination,
+    /// Per-destination choices that are part of what gets approved (e.g. Instagram's "share
+    /// to feed"). Absent in revisions made before they existed.
+    #[serde(default, skip_serializing_if = "DestinationOptions::is_default")]
+    pub options: DestinationOptions,
+}
+
+/// Choices a destination offers beyond media and copy. `None` means the platform default.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DestinationOptions {
+    /// Instagram Reels: also show the reel in the profile's main feed (default: yes).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share_to_feed: Option<bool>,
+}
+
+impl DestinationOptions {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl RevisionContent {
@@ -191,6 +209,7 @@ impl RevisionContent {
             caption: caption.trim().to_owned(),
             hashtags: normalize_hashtags(hashtags)?,
             destination,
+            options: DestinationOptions::default(),
         })
     }
 }

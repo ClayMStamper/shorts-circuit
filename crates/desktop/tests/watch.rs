@@ -13,6 +13,7 @@ fn fast() -> WatchConfig {
         settle: Duration::from_millis(300),
         poll: Duration::from_millis(50),
         rescan: Duration::from_secs(3600),
+        ..WatchConfig::default()
     }
 }
 

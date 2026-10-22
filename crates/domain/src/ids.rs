@@ -71,6 +71,10 @@ id_type!(
     PublicationId
 );
 id_type!(
+    /// Identifies a [`Workflow`](crate::Workflow).
+    WorkflowId
+);
+id_type!(
     /// Identifies a [`Job`](crate::Job).
     JobId
 );

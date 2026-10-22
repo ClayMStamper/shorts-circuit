@@ -9,6 +9,12 @@ use serde::Serialize;
 )]
 pub enum AppEvent {
     LibraryChanged,
+    /// A waiting TikTok post got its original file (from the downloads folder or picked by
+    /// hand).
+    OriginalAttached {
+        asset_id: String,
+        title: String,
+    },
     Imported {
         asset_id: String,
         duplicate: bool,
