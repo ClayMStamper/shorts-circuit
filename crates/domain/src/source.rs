@@ -63,6 +63,51 @@ pub fn match_score(
     })
 }
 
+/// How long after "Get original" a download is attributed to that post first.
+pub const EXPECT_ORIGINAL_MINUTES: i64 = 30;
+
+/// Which pending post a video that just appeared in the downloads folder is the original of.
+///
+/// 1. A post the owner asked for ("Get original", within [`EXPECT_ORIGINAL_MINUTES`]) whose
+///    duration fits wins; with several, the most recently asked for. A post whose duration
+///    TikTok didn't report fits any file here, since the owner just asked for it.
+/// 2. Otherwise the file must fit exactly one pending post by duration and post time (as the
+///    watch folder's matching does); anything ambiguous or unrelated is left alone.
+pub fn pick_post_for_download<'a>(
+    pending: &'a [TikTokPost],
+    expected: &[(String, DateTime<Utc>)],
+    file_duration_ms: u64,
+    now: DateTime<Utc>,
+) -> Option<&'a TikTokPost> {
+    let fits = |p: &TikTokPost| {
+        p.duration_ms
+            .is_none_or(|d| d.abs_diff(file_duration_ms) <= MATCH_DURATION_TOLERANCE_MS)
+    };
+    let recent = Duration::minutes(EXPECT_ORIGINAL_MINUTES);
+    let asked = pending
+        .iter()
+        .filter_map(|p| {
+            expected
+                .iter()
+                .filter(|(id, at)| *id == p.video_id && now - *at <= recent && *at <= now)
+                .map(|(_, at)| *at)
+                .max()
+                .map(|at| (p, at))
+        })
+        .filter(|(p, _)| fits(p))
+        .max_by_key(|(_, at)| *at);
+    if let Some((post, _)) = asked {
+        return Some(post);
+    }
+    let mut fitting = pending
+        .iter()
+        .filter(|p| match_score(p.posted_at, p.duration_ms, now, file_duration_ms).is_some());
+    match (fitting.next(), fitting.next()) {
+        (Some(only), None) => Some(only),
+        _ => None,
+    }
+}
+
 /// A library title for a post: TikTok's title, else the caption's first line, else the date.
 pub fn post_title(title: Option<&str>, caption: Option<&str>, posted_at: DateTime<Utc>) -> String {
     let pick = |s: Option<&str>| {
@@ -107,6 +152,91 @@ mod tests {
         let a = match_score(posted, Some(20_000), at("2026-10-30T10:00:00Z"), 20_100).unwrap();
         let b = match_score(posted, Some(20_000), at("2026-10-30T17:59:00Z"), 20_900).unwrap();
         assert!(a < b);
+    }
+
+    fn post(id: &str, posted: &str, duration_ms: Option<u64>) -> TikTokPost {
+        TikTokPost {
+            video_id: id.into(),
+            asset_id: AssetId::new(),
+            posted_at: at(posted),
+            duration_ms,
+            title: id.into(),
+            caption: String::new(),
+            share_url: None,
+            cover_url: None,
+            cover_path: None,
+            discovered_at: at(posted),
+            matched_at: None,
+        }
+    }
+
+    #[test]
+    fn a_requested_post_wins_even_when_old() {
+        let now = at("2026-11-20T10:00:00Z");
+        let pending = vec![
+            post("old", "2026-10-01T10:00:00Z", Some(51_000)),
+            post("new", "2026-11-20T09:00:00Z", Some(51_000)),
+        ];
+        // Without a request the file fits only the recent post.
+        assert_eq!(
+            pick_post_for_download(&pending, &[], 51_400, now)
+                .unwrap()
+                .video_id,
+            "new"
+        );
+        // Asking for the old one makes it win, even weeks after it was posted.
+        let asked = [("old".to_owned(), now - Duration::minutes(2))];
+        assert_eq!(
+            pick_post_for_download(&pending, &asked, 51_400, now)
+                .unwrap()
+                .video_id,
+            "old"
+        );
+        // But not with the wrong length, or once the request is stale.
+        assert_eq!(
+            pick_post_for_download(&pending, &asked, 20_000, now).map(|p| p.video_id.as_str()),
+            None
+        );
+        let stale = [("old".to_owned(), now - Duration::minutes(45))];
+        assert_eq!(
+            pick_post_for_download(&pending, &stale, 51_400, now)
+                .unwrap()
+                .video_id,
+            "new"
+        );
+    }
+
+    #[test]
+    fn the_latest_request_wins_and_unknown_durations_fit_when_asked() {
+        let now = at("2026-11-20T10:00:00Z");
+        let pending = vec![
+            post("a", "2026-10-01T10:00:00Z", Some(30_000)),
+            post("b", "2026-10-02T10:00:00Z", None),
+        ];
+        let asked = [
+            ("a".to_owned(), now - Duration::minutes(5)),
+            ("b".to_owned(), now - Duration::minutes(1)),
+        ];
+        assert_eq!(
+            pick_post_for_download(&pending, &asked, 30_000, now)
+                .unwrap()
+                .video_id,
+            "b"
+        );
+    }
+
+    #[test]
+    fn unrequested_downloads_need_exactly_one_fitting_post() {
+        let now = at("2026-11-20T10:00:00Z");
+        let pending = vec![
+            post("a", "2026-11-20T08:00:00Z", Some(30_000)),
+            post("b", "2026-11-20T09:00:00Z", Some(30_200)),
+        ];
+        // Two recent posts of the same length: ambiguous, left alone.
+        assert!(pick_post_for_download(&pending, &[], 30_100, now).is_none());
+        // An unrelated video in Downloads: left alone.
+        assert!(pick_post_for_download(&pending, &[], 95_000, now).is_none());
+        assert!(pick_post_for_download(&[], &[], 30_000, now).is_none());
     }
 
     #[test]

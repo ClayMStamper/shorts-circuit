@@ -24,8 +24,8 @@ use shorts_adapters::youtube::{
 };
 use shorts_adapters::{Adapter, AdapterError};
 use shorts_domain::{
-    AccountId, Capabilities, ConnectedAccount, NextAction, Platform, PublicationEvent,
-    PublicationState, PublishAccess,
+    AccountId, Capabilities, ConnectedAccount, ExecutionOwner, NextAction, Platform,
+    PublicationEvent, PublicationState, PublishAccess,
 };
 use shorts_store::{PublicationFilter, Store};
 use tokio_util::sync::CancellationToken;
@@ -36,6 +36,7 @@ use crate::credentials::CredentialStore;
 use crate::error::{AppError, AppResult};
 use crate::events::AppEvent;
 use crate::views::AccountView;
+use shorts_cloud::{CloudCredential, Secret};
 
 const CLIENT_KEY: &str = "google_oauth_client";
 const CHANNELS_KEY: &str = "youtube_channels";
@@ -758,6 +759,8 @@ impl YouTubeConnector {
             .list(&PublicationFilter {
                 account_id: Some(account),
                 states: vec![PublicationState::NeedsAuthentication],
+                // The cloud runner resumes its own once it gets the new credential.
+                owner: Some(ExecutionOwner::Desktop),
                 ..Default::default()
             })
             .await?;
@@ -827,4 +830,57 @@ impl YouTubeConnector {
         self.app.emit(AppEvent::YouTubeChanged);
         self.status().await
     }
+}
+
+// --- cloud runner ----------------------------------------------------------------------------
+
+/// The channel's credential for the cloud runner: the OAuth client and the refresh token.
+pub(crate) fn cloud_credential(
+    credentials: &dyn CredentialStore,
+    account: AccountId,
+) -> Result<Option<CloudCredential>, String> {
+    let read = |key: &str| credentials.get(key).map_err(|e| e.to_string());
+    let client: Option<ClientConfig> =
+        read(CLIENT_KEY)?.and_then(|r| serde_json::from_str(&r).ok());
+    let grant: Option<Grant> =
+        read(&grant_key(account))?.and_then(|r| serde_json::from_str(&r).ok());
+    Ok(match (client, grant) {
+        (Some(client), Some(grant)) => Some(CloudCredential::YoutubeShorts {
+            client_id: client.client_id,
+            client_secret: Secret::new(client.client_secret),
+            refresh_token: Secret::new(grant.refresh_token),
+            channel_id: grant.channel_id,
+        }),
+        _ => None,
+    })
+}
+
+/// Keeps a refresh token the cloud runner was given by Google in place of the old one.
+pub(crate) fn import_cloud_credential(
+    credentials: &dyn CredentialStore,
+    account: AccountId,
+    credential: &CloudCredential,
+) -> Result<(), String> {
+    let CloudCredential::YoutubeShorts {
+        refresh_token,
+        channel_id,
+        ..
+    } = credential
+    else {
+        return Err("not a YouTube credential".into());
+    };
+    let key = grant_key(account);
+    let Some(mut grant) = credentials
+        .get(&key)
+        .map_err(|e| e.to_string())?
+        .and_then(|r| serde_json::from_str::<Grant>(&r).ok())
+    else {
+        return Ok(());
+    };
+    if &grant.channel_id != channel_id {
+        return Err("the cloud runner's credential is for another channel".into());
+    }
+    grant.refresh_token = refresh_token.expose().to_owned();
+    let raw = serde_json::to_string(&grant).expect("grant serializes");
+    credentials.set(&key, &raw).map_err(|e| e.to_string())
 }

@@ -58,6 +58,8 @@ pub struct FakeAdapter {
     pub hang_after_publish: Mutex<bool>,
     pub calls: Mutex<Vec<Call>>,
     pub published: Mutex<Vec<FakePost>>,
+    /// The note a publish reports, e.g. "Uploaded as private."
+    pub publish_note: Mutex<Option<String>>,
 }
 
 impl FakeAdapter {
@@ -71,6 +73,7 @@ impl FakeAdapter {
             hang_after_publish: Mutex::new(false),
             calls: Mutex::new(Vec::new()),
             published: Mutex::new(Vec::new()),
+            publish_note: Mutex::new(None),
         }
     }
 
@@ -194,7 +197,7 @@ impl Adapter for FakeAdapter {
         Ok(PublishedPost {
             remote_id: post.id.clone(),
             url: Some(format!("https://example.invalid/{}", post.id)),
-            note: None,
+            note: self.publish_note.lock().unwrap().clone(),
             post,
         })
     }

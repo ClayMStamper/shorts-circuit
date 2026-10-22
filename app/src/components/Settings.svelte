@@ -2,7 +2,6 @@
   import { onMount } from "svelte";
   import { api } from "../lib/api";
   import { platformLabel } from "../lib/format";
-  import { formatDateTime } from "../lib/format";
   import { pickFolder } from "../lib/tauri";
   import {
     PLATFORMS,
@@ -15,11 +14,9 @@
     type Weekday,
   } from "../lib/types";
   import { errorToast, toast } from "./Toasts.svelte";
-  import TikTokSettings from "./TikTokSettings.svelte";
-  import InstagramSettings from "./InstagramSettings.svelte";
-  import YouTubeSettings from "./YouTubeSettings.svelte";
 
-  let { revision = 0 }: { revision?: number } = $props();
+  type Advanced = "library" | "collections" | "monitor";
+  let { revision = 0, onAdvanced }: { revision?: number; onAdvanced?: (to: Advanced) => void } = $props();
 
   let prefs = $state<Preferences | null>(null);
   let accounts = $state<AccountView[]>([]);
@@ -63,19 +60,6 @@
     }
   }
 
-  async function chooseWatchFolder() {
-    const dir = await pickFolder();
-    if (dir) update({ watchFolder: dir }, "Watching folder");
-  }
-
-  async function checkWatchFolder() {
-    try {
-      prefs = await api.checkWatchFolder();
-    } catch (e) {
-      errorToast(e);
-    }
-  }
-
   async function chooseExportDir() {
     const dir = await pickFolder();
     if (dir) update({ exportDir: dir });
@@ -104,8 +88,13 @@
   }
 </script>
 
-<section class="settings">
-  <h1>Settings</h1>
+<section class="settings page">
+  <div class="page-head">
+    <div>
+      <h1>Settings</h1>
+      <p class="subtitle">Rarely used options. Accounts and the watch folder are in Connections.</p>
+    </div>
+  </div>
   {#if prefs}
     <fieldset>
       <legend>Time</legend>
@@ -169,45 +158,14 @@
     </fieldset>
 
     <fieldset>
-      <legend>Folders</legend>
-      <p>
-        Watch folder: <code>{prefs.watchFolder ?? "none"}</code>
-        <button onclick={chooseWatchFolder}>Choose…</button>
-        {#if prefs.watchFolder}<button onclick={() => update({ watchFolder: null }, "Stopped watching")}>Stop watching</button>{/if}
-      </p>
-      {#if prefs.watchFolder}
-        <p class="muted">
-          {prefs.watchCheckedAt ? `Last checked ${formatDateTime(prefs.watchCheckedAt)}` : "Not checked yet"} ·
-          <button class="link" onclick={checkWatchFolder}>Check now</button>
-        </p>
-      {/if}
-      <p class="muted">
-        New videos saved here (for example a folder your phone or editor syncs to) are imported automatically once
-        they finish writing.
-      </p>
-      <label>
-        Put watch-folder imports in
-        <select
-          value={prefs.watchCollection ?? ""}
-          onchange={(e) => update({ watchCollection: e.currentTarget.value || null })}
-        >
-          <option value="">no collection</option>
-          {#each collections as c (c.id)}<option value={c.id}>{c.name}</option>{/each}
-        </select>
-      </label>
-      <p class="muted">The collection's rules then run for every new import; you still approve each publication.</p>
+      <legend>Export packages</legend>
       <p>
         Export packages go to: <code>{prefs.exportDir ?? "the app's data folder"}</code>
         <button onclick={chooseExportDir}>Choose…</button>
         {#if prefs.exportDir}<button onclick={() => update({ exportDir: null })}>Use default</button>{/if}
       </p>
+      <p class="muted">For destinations without a connection: a folder with the video, caption and posting steps.</p>
     </fieldset>
-
-    <YouTubeSettings {revision} onChanged={async () => (accounts = await api.listAccounts())} />
-
-    <InstagramSettings {revision} onChanged={async () => (accounts = await api.listAccounts())} />
-
-    <TikTokSettings {revision} />
 
     <fieldset>
       <legend>Destination accounts</legend>
@@ -233,9 +191,33 @@
         <button type="submit">Add account</button>
       </form>
       <p class="muted">
-        Connect YouTube channels and Instagram accounts above to publish automatically. Other accounts publish through export packages: a folder
-        with the rendered video, caption and step-by-step posting instructions.
+        Connect YouTube channels, Instagram accounts, LinkedIn pages and Snapchat profiles in Connections to publish
+        automatically. Accounts added here publish through export packages instead.
       </p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Advanced</legend>
+      <p class="muted">
+        The building blocks under workflows. You don't need these day to day: workflows render, caption and publish on
+        their own.
+      </p>
+      <div class="advanced-nav">
+        <button onclick={() => onAdvanced?.("library")}>Library</button>
+        <button onclick={() => onAdvanced?.("collections")}>Collections and rules</button>
+        <button onclick={() => onAdvanced?.("monitor")}>Monitor and jobs</button>
+      </div>
+      <label>
+        Put watch-folder imports in
+        <select
+          value={prefs.watchCollection ?? ""}
+          onchange={(e) => update({ watchCollection: e.currentTarget.value || null })}
+        >
+          <option value="">no collection</option>
+          {#each collections as c (c.id)}<option value={c.id}>{c.name}</option>{/each}
+        </select>
+      </label>
+      <p class="muted">Workflows use this collection (created as "Source videos"). Changing it moves where new videos go.</p>
     </fieldset>
   {/if}
 </section>

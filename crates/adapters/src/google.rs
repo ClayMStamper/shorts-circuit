@@ -323,11 +323,43 @@ impl Loopback {
         })
     }
 
+    /// Listens on a fixed port, for providers that only accept a pre-registered redirect
+    /// address (`http://127.0.0.1:<port><path>`). Requests are matched by `state`, not path.
+    /// Port `0` picks a free port.
+    ///
+    /// A sign-in that was just cancelled may still be releasing the port, so a busy port is
+    /// retried for a few seconds before giving up.
+    pub async fn bind_port(port: u16, path: &str) -> std::io::Result<Self> {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        let listener = loop {
+            match TcpListener::bind(("127.0.0.1", port)).await {
+                Ok(listener) => break listener,
+                Err(e)
+                    if e.kind() == std::io::ErrorKind::AddrInUse
+                        && tokio::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => return Err(e),
+            }
+        };
+        let port = listener.local_addr()?.port();
+        let path = if path.starts_with('/') {
+            path.to_owned()
+        } else {
+            format!("/{path}")
+        };
+        Ok(Self {
+            listener,
+            redirect_uri: format!("http://127.0.0.1:{port}{path}"),
+        })
+    }
+
     pub fn redirect_uri(&self) -> &str {
         &self.redirect_uri
     }
 
-    /// Waits for Google to redirect the browser back with an authorization code for
+    /// Waits for the provider to redirect the browser back with an authorization code for
     /// `expected_state`. Requests with another state (or none) are answered and ignored, so a
     /// stray page can't end or hijack the sign-in. The caller bounds the wait.
     pub async fn wait_for_code(&self, expected_state: &str) -> Result<String, OAuthError> {

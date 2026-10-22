@@ -1,0 +1,12 @@
+# Caddy obtains and renews the TLS certificate for RUNNER_DOMAIN automatically (the domain's
+# DNS A/AAAA record must point at this server, and ports 80 and 443 must be open).
+# Caddy's access logs leave out the Authorization header (the installation token) unless
+# `log_credentials` is turned on; keep it off.
+{$RUNNER_DOMAIN} {
+	# Uploads arrive in chunks of up to 8 MiB.
+	request_body {
+		max_size 16MB
+	}
+	reverse_proxy runner:8787
+	log
+}

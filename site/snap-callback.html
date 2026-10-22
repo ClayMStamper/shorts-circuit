@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <title>Snapchat sign-in · Shorts Circuit</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="snap-callback.js" defer></script>
+</head>
+<body>
+<main>
+  <p class="crumbs"><a href="./">Shorts Circuit</a></p>
+  <h1>Finish connecting Snapchat</h1>
+
+  <noscript><p class="error">This page needs JavaScript to read the sign-in result from its address.
+  Nothing is sent anywhere; the page only shows it to you.</p></noscript>
+
+  <section id="result" hidden>
+    <p>Copy this text and paste it into Shorts Circuit, under Settings → Snapchat Spotlight
+    publishing → <em>Paste the text from the page</em>.</p>
+    <div class="copy">
+      <textarea id="code" rows="3" readonly spellcheck="false" aria-label="Text to paste into Shorts Circuit"></textarea>
+      <button id="copy" type="button">Copy</button>
+    </div>
+    <p id="copied" class="meta" role="status"></p>
+    <p class="meta">The text works once, for a few minutes. Don't share it: together with the app's
+    settings it signs Shorts Circuit in to your Snapchat profile.</p>
+  </section>
+
+  <section id="failed" hidden>
+    <p class="error">Snapchat didn't sign you in: <span id="reason"></span></p>
+    <p>Go back to Shorts Circuit and start connecting again.</p>
+  </section>
+
+  <section id="empty" hidden>
+    <p>This page shows the result of signing in to Snapchat from Shorts Circuit. Open it by choosing
+    <em>Connect a Snapchat public profile…</em> in the app's Settings.</p>
+  </section>
+
+  <p class="meta">This page runs entirely in your browser and sends nothing anywhere.</p>
+</main>
+</body>
+</html>

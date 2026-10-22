@@ -3,6 +3,7 @@
 //! `shorts-desktop`; commands here only translate arguments and results. No credentials or
 //! tokens ever cross into the webview.
 
+mod cloud;
 mod commands;
 mod keyring_store;
 
@@ -10,9 +11,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use shorts_adapters::AdapterRegistry;
+use shorts_desktop::cloud::CloudSync;
 use shorts_desktop::instagram::{InstagramConnector, InstagramSetup};
+use shorts_desktop::linkedin::{LinkedInConnector, LinkedInSetup};
+use shorts_desktop::snapchat::{SnapSetup, SnapchatConnector};
 use shorts_desktop::tiktok::{TikTokIntake, TikTokSetup};
-use shorts_desktop::watch::{WatchConfig, WatchFolder};
+use shorts_desktop::watch::{WatchConfig, WatchFolder, WatchKind};
 use shorts_desktop::youtube::{YouTubeConnector, YouTubeSetup};
 use shorts_desktop::{App, AppPaths, FfmpegBackend};
 use shorts_media::{MediaTools, RenderCache, Renderer};
@@ -38,22 +42,53 @@ pub struct Shell {
     pub tiktok: Arc<TikTokIntake>,
     /// YouTube Shorts publishing; channels are connected in Settings.
     pub youtube: Arc<YouTubeConnector>,
-    /// Instagram Reels publishing; accounts are connected in Settings with a pasted token.
+    /// Instagram Reels publishing; accounts are connected through their Facebook Page with a
+    /// pasted token.
     pub instagram: Arc<InstagramConnector>,
+    /// LinkedIn Company Page posts; pages are connected in Settings with a pasted token.
+    pub linkedin: Arc<LinkedInConnector>,
+    /// Snapchat Spotlight posts; profiles are connected in Settings with the owner's Snap OAuth
+    /// app (loopback sign-in or a pasted code).
+    pub snapchat: Arc<SnapchatConnector>,
+    /// Optional cloud runner; off until its address and token are saved in Settings.
+    pub cloud: Arc<CloudSync>,
     pub(crate) watch: Mutex<Option<WatchFolder>>,
+    /// The downloads folder, watched only for originals of pending TikTok posts.
+    pub(crate) downloads_watch: Mutex<Option<WatchFolder>>,
     shutdown: CancellationToken,
 }
 
 impl Shell {
     /// (Re)starts the watch folder from the saved preference.
     pub async fn restart_watch(&self, handle: &tauri::AppHandle) {
-        let folder = match self.app.preferences().await {
-            Ok(prefs) => prefs.watch_folder,
+        let (folder, downloads) = match self.app.preferences().await {
+            Ok(prefs) => (prefs.watch_folder, prefs.downloads_folder),
             Err(e) => {
                 warn!(error = %e, "could not read preferences");
                 return;
             }
         };
+        {
+            let mut slot = self.downloads_watch.lock().expect("downloads watch lock");
+            *slot = None;
+            // The same folder as the watch folder needs no second watch.
+            if let Some(dir) = downloads.filter(|d| Some(d) != folder.as_ref()) {
+                match WatchFolder::start(
+                    self.app.clone(),
+                    PathBuf::from(&dir),
+                    WatchConfig {
+                        kind: WatchKind::Downloads,
+                        ..WatchConfig::default()
+                    },
+                ) {
+                    Ok(watch) => {
+                        info!(folder = %dir, "watching downloads for TikTok originals");
+                        *slot = Some(watch);
+                    }
+                    Err(e) => warn!(folder = %dir, error = %e, "cannot watch the downloads folder"),
+                }
+            }
+        }
         let mut slot = self.watch.lock().expect("watch lock");
         *slot = None;
         let Some(folder) = folder else { return };
@@ -126,23 +161,39 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
         InstagramSetup::from_env(),
         Arc::new(keyring_store::KeyringCredentials),
     );
+    let linkedin = LinkedInConnector::new(
+        app.clone(),
+        LinkedInSetup::from_env(),
+        Arc::new(keyring_store::KeyringCredentials),
+    );
+    let snapchat = SnapchatConnector::new(
+        app.clone(),
+        SnapSetup::from_env(),
+        Arc::new(keyring_store::KeyringCredentials),
+    );
     let shutdown = CancellationToken::new();
     app.start_worker(WorkerConfig::default(), shutdown.clone())
         .await?;
     let tiktok = TikTokIntake::new(
         app.clone(),
-        TikTokSetup::from_env(),
+        Some(TikTokSetup::from_env()),
         Arc::new(keyring_store::KeyringCredentials),
     );
     tauri::async_runtime::spawn(tiktok.clone().run(shutdown.clone()));
     tauri::async_runtime::spawn(instagram.clone().run(shutdown.clone()));
+    let cloud = CloudSync::new(app.clone(), Arc::new(keyring_store::KeyringCredentials));
+    tauri::async_runtime::spawn(cloud.clone().run(shutdown.clone()));
     Ok(Shell {
         app,
         media,
         tiktok,
         youtube,
         instagram,
+        linkedin,
+        snapchat,
+        cloud,
         watch: Mutex::new(None),
+        downloads_watch: Mutex::new(None),
         shutdown,
     })
 }
@@ -228,6 +279,23 @@ pub fn run() {
             commands::set_unattended,
             commands::rule_activity,
             commands::check_watch_folder,
+            commands::get_original,
+            commands::cancel_get_original,
+            commands::send_to_workflows,
+            commands::attach_original,
+            commands::default_downloads_folder,
+            commands::list_workflows,
+            commands::workflow_detail,
+            commands::create_workflow,
+            commands::update_workflow,
+            commands::delete_workflow,
+            commands::activity,
+            commands::publish_now,
+            commands::republish,
+            commands::check_for_new_content,
+            commands::tiktok_app_info,
+            commands::tiktok_set_app,
+            commands::tiktok_clear_app,
             commands::tiktok_status,
             commands::tiktok_set_enabled,
             commands::tiktok_connect,
@@ -243,8 +311,22 @@ pub fn run() {
             commands::youtube_disconnect,
             commands::youtube_set_public_uploads,
             commands::instagram_status,
+            commands::instagram_find_pages,
             commands::instagram_connect,
             commands::instagram_disconnect,
+            commands::linkedin_status,
+            commands::linkedin_find_pages,
+            commands::linkedin_connect,
+            commands::linkedin_disconnect,
+            commands::snapchat_status,
+            commands::snapchat_set_client,
+            commands::snapchat_clear_client,
+            commands::snapchat_connect,
+            commands::snapchat_connect_progress,
+            commands::snapchat_cancel_connect,
+            commands::snapchat_finish_with_code,
+            commands::snapchat_check_connection,
+            commands::snapchat_disconnect,
             commands::open_link,
             commands::match_suggestions,
             commands::confirm_match,
@@ -256,6 +338,13 @@ pub fn run() {
             commands::update_preferences,
             commands::media_status,
             commands::open_folder,
+            cloud::cloud_status,
+            cloud::cloud_configure,
+            cloud::cloud_set_enabled,
+            cloud::cloud_forget,
+            cloud::cloud_sync_now,
+            cloud::send_to_cloud,
+            cloud::take_back_from_cloud,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build the Tauri application");
