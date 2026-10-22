@@ -83,6 +83,16 @@ described in [docs/cloud-runner.md](docs/cloud-runner.md).
 The release build bundles `ffmpeg.exe` and `ffprobe.exe` next to the app (Tauri sidecars) and
 produces an NSIS installer that installs for the current user without admin rights.
 
+One step, from the working copy as it is (fetches FFmpeg only if the bundle doesn't have it yet,
+then prints the installer's path):
+
+```powershell
+./scripts/build-installer.ps1
+./scripts/build-installer.ps1 -FfmpegFromDir "C:\ffmpeg\bin"
+```
+
+Or by hand:
+
 ```powershell
 # FFmpeg for the bundle: download a checked Gyan.dev build, or copy a local one
 ./scripts/fetch-ffmpeg.ps1
