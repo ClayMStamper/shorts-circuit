@@ -190,6 +190,8 @@ impl<'a> Jobs<'a> {
     ///
     /// Runs in a `BEGIN IMMEDIATE` transaction, which takes SQLite's write lock up front, so two
     /// workers can never claim the same job; the version check is a second line of defence.
+    /// Publish jobs for publications the cloud runner owns are never claimed here: this is the
+    /// desktop's database, and the hand-over takes the same lock.
     pub async fn claim_next(
         &self,
         owner: &str,
@@ -201,7 +203,9 @@ impl<'a> Jobs<'a> {
         let now_s = ts(now);
         let mut sql = format!(
             "SELECT {COLUMNS} FROM jobs WHERE ((state = 'queued' AND run_at <= ?1) \
-             OR (state = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?1)))"
+             OR (state = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?1))) \
+             AND NOT (kind = 'publish_publication' AND EXISTS (SELECT 1 FROM publications p \
+             WHERE p.id = jobs.subject AND p.owner != 'desktop'))"
         );
         if !kinds.is_empty() {
             let marks = (0..kinds.len())
@@ -290,11 +294,30 @@ impl<'a> Jobs<'a> {
     }
 }
 
+/// The open job of `kind` for `subject`, read inside a transaction.
+pub(crate) async fn open_for_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    kind: JobKind,
+    subject: &str,
+) -> StoreResult<Option<Job>> {
+    sqlx::query(&format!(
+        "SELECT {COLUMNS} FROM jobs WHERE kind = ? AND subject = ? \
+         AND state IN ('queued', 'running', 'paused')"
+    ))
+    .bind(kind.as_str())
+    .bind(subject)
+    .fetch_optional(&mut **tx)
+    .await?
+    .as_ref()
+    .map(decode)
+    .transpose()
+}
+
 fn marks(n: usize) -> String {
     vec!["?"; n].join(", ")
 }
 
-async fn write_tx(
+pub(crate) async fn write_tx(
     tx: &mut Transaction<'_, Sqlite>,
     job: &Job,
     expected_version: u64,

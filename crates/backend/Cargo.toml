@@ -1,6 +1,6 @@
 [package]
 name = "shorts-backend"
-description = "Axum OAuth broker for confidential client credentials; later the cloud runner."
+description = "Axum OAuth broker for confidential client credentials (the cloud runner is shorts-runner)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,3 +12,14 @@ publish = false
 workspace = true
 
 [dependencies]
+axum.workspace = true
+reqwest = { workspace = true, features = ["form"] }
+serde.workspace = true
+serde_json.workspace = true
+shorts-adapters.workspace = true
+tokio = { workspace = true, features = ["net", "signal"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true

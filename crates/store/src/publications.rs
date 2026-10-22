@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use shorts_domain::{
-    AccountId, AssetId, Platform, Publication, PublicationId, PublicationRecord,
+    AccountId, AssetId, ExecutionOwner, Platform, Publication, PublicationId, PublicationRecord,
     PublicationRevision, PublicationState, Schedule, TimeZoneName, Transition, VariantId,
 };
 use sqlx::sqlite::SqliteRow;
@@ -14,6 +14,7 @@ pub struct PublicationFilter {
     pub asset_id: Option<AssetId>,
     pub account_id: Option<AccountId>,
     pub states: Vec<PublicationState>,
+    pub owner: Option<ExecutionOwner>,
 }
 
 /// One row of a publication's audit log.
@@ -32,7 +33,7 @@ pub struct Publications<'a> {
 
 const COLUMNS: &str = "p.id, p.asset_id, p.platform, p.state, p.current_revision, p.approval, \
                        p.schedule_at, p.schedule_tz, p.retry_at, p.user_action, p.last_error, \
-                       p.published, p.version, p.created_at, p.updated_at, \
+                       p.published, p.owner, p.handover_id, p.version, p.created_at, p.updated_at, \
                        r.content AS revision_content, r.created_at AS revision_created_at";
 
 const FROM: &str = "publications p JOIN publication_revisions r \
@@ -45,44 +46,8 @@ impl<'a> Publications<'a> {
 
     /// Inserts a new publication and its first revision.
     pub async fn insert(&self, publication: &Publication) -> StoreResult<()> {
-        let r = publication.record();
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
-            "INSERT INTO publications (id, asset_id, platform, state, current_revision, \
-             account_id, variant_id, approval, schedule_at, schedule_tz, retry_at, user_action, \
-             last_error, published, version, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .bind(r.id.to_string())
-        .bind(r.asset_id.to_string())
-        .bind(r.platform.as_str())
-        .bind(r.state.as_str())
-        .bind(i64::from(r.revision.number))
-        .bind(r.revision.content.destination.account_id.to_string())
-        .bind(r.revision.content.variant_id.to_string())
-        .bind(opt_json(r.approval.as_ref()))
-        .bind(opt_ts(r.schedule.map(|s| s.at)))
-        .bind(r.schedule.map(|s| s.timezone.name()))
-        .bind(opt_ts(r.retry_at))
-        .bind(opt_json(r.user_action.as_ref()))
-        .bind(&r.last_error)
-        .bind(opt_json(r.published.as_ref()))
-        .bind(to_i64(r.version))
-        .bind(ts(r.created_at))
-        .bind(ts(r.updated_at))
-        .execute(&mut *tx)
-        .await?;
-        insert_revision(&mut tx, r.id, &r.revision).await?;
-        log(
-            &mut tx,
-            r.id,
-            None,
-            r.state,
-            "created",
-            r.revision.number,
-            r.created_at,
-        )
-        .await?;
+        insert_publication(&mut tx, publication).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -95,55 +60,8 @@ impl<'a> Publications<'a> {
         publication: &Publication,
         transition: &Transition,
     ) -> StoreResult<()> {
-        let r = publication.record();
-        if transition.publication_id != r.id || transition.to != r.state {
-            return Err(StoreError::Corrupt(
-                "transition does not belong to this publication state".into(),
-            ));
-        }
-        let expected = r.version.checked_sub(1).ok_or_else(|| {
-            StoreError::Corrupt("saved publication must come from a transition".into())
-        })?;
         let mut tx = self.pool.begin().await?;
-        if transition.new_revision {
-            insert_revision(&mut tx, r.id, &r.revision).await?;
-        }
-        let result = sqlx::query(
-            "UPDATE publications SET state = ?, current_revision = ?, account_id = ?, \
-             variant_id = ?, approval = ?, schedule_at = ?, schedule_tz = ?, retry_at = ?, \
-             user_action = ?, last_error = ?, published = ?, version = ?, updated_at = ? \
-             WHERE id = ? AND version = ?",
-        )
-        .bind(r.state.as_str())
-        .bind(i64::from(r.revision.number))
-        .bind(r.revision.content.destination.account_id.to_string())
-        .bind(r.revision.content.variant_id.to_string())
-        .bind(opt_json(r.approval.as_ref()))
-        .bind(opt_ts(r.schedule.map(|s| s.at)))
-        .bind(r.schedule.map(|s| s.timezone.name()))
-        .bind(opt_ts(r.retry_at))
-        .bind(opt_json(r.user_action.as_ref()))
-        .bind(&r.last_error)
-        .bind(opt_json(r.published.as_ref()))
-        .bind(to_i64(r.version))
-        .bind(ts(r.updated_at))
-        .bind(r.id.to_string())
-        .bind(to_i64(expected))
-        .execute(&mut *tx)
-        .await?;
-        if result.rows_affected() == 0 {
-            return Err(StoreError::conflict("publication", r.id));
-        }
-        log(
-            &mut tx,
-            r.id,
-            Some(transition.from),
-            transition.to,
-            transition.event,
-            transition.revision,
-            transition.at,
-        )
-        .await?;
+        save_publication(&mut tx, publication, transition).await?;
         tx.commit().await?;
         Ok(())
     }
@@ -180,6 +98,10 @@ impl<'a> Publications<'a> {
             let marks = vec!["?"; filter.states.len()].join(", ");
             sql.push_str(&format!(" AND p.state IN ({marks})"));
             binds.extend(filter.states.iter().map(|s| s.as_str().to_owned()));
+        }
+        if let Some(owner) = filter.owner {
+            sql.push_str(" AND p.owner = ?");
+            binds.push(owner.as_str().to_owned());
         }
         sql.push_str(" ORDER BY p.schedule_at IS NULL, p.schedule_at, p.created_at");
         let mut query = sqlx::query(&sql);
@@ -252,6 +174,124 @@ impl<'a> Publications<'a> {
             })
             .collect()
     }
+}
+
+/// Writes the result of `Publication::apply` if the stored row is still at the version the
+/// transition started from, appending a new revision and the audit log entry.
+pub(crate) async fn save_publication(
+    tx: &mut Transaction<'_, Sqlite>,
+    publication: &Publication,
+    transition: &Transition,
+) -> StoreResult<()> {
+    let r = publication.record();
+    if transition.publication_id != r.id || transition.to != r.state {
+        return Err(StoreError::Corrupt(
+            "transition does not belong to this publication state".into(),
+        ));
+    }
+    let expected = r.version.checked_sub(1).ok_or_else(|| {
+        StoreError::Corrupt("saved publication must come from a transition".into())
+    })?;
+    if transition.new_revision {
+        insert_revision(tx, r.id, &r.revision).await?;
+    }
+    let result = sqlx::query(
+        "UPDATE publications SET state = ?, current_revision = ?, account_id = ?, \
+             variant_id = ?, approval = ?, schedule_at = ?, schedule_tz = ?, retry_at = ?, \
+             user_action = ?, last_error = ?, published = ?, owner = ?, handover_id = ?, \
+             version = ?, updated_at = ? WHERE id = ? AND version = ?",
+    )
+    .bind(r.state.as_str())
+    .bind(i64::from(r.revision.number))
+    .bind(r.revision.content.destination.account_id.to_string())
+    .bind(r.revision.content.variant_id.to_string())
+    .bind(opt_json(r.approval.as_ref()))
+    .bind(opt_ts(r.schedule.map(|s| s.at)))
+    .bind(r.schedule.map(|s| s.timezone.name()))
+    .bind(opt_ts(r.retry_at))
+    .bind(opt_json(r.user_action.as_ref()))
+    .bind(&r.last_error)
+    .bind(opt_json(r.published.as_ref()))
+    .bind(r.owner.as_str())
+    .bind(r.handover.map(|h| h.to_string()))
+    .bind(to_i64(r.version))
+    .bind(ts(r.updated_at))
+    .bind(r.id.to_string())
+    .bind(to_i64(expected))
+    .execute(&mut **tx)
+    .await?;
+    if result.rows_affected() == 0 {
+        return Err(StoreError::conflict("publication", r.id));
+    }
+    log(
+        tx,
+        r.id,
+        Some(transition.from),
+        transition.to,
+        transition.event,
+        transition.revision,
+        transition.at,
+    )
+    .await?;
+    Ok(())
+}
+
+/// Reads a publication inside a transaction.
+pub(crate) async fn get_publication(
+    tx: &mut Transaction<'_, Sqlite>,
+    id: PublicationId,
+) -> StoreResult<Option<Publication>> {
+    sqlx::query(&format!("SELECT {COLUMNS} FROM {FROM} WHERE p.id = ?"))
+        .bind(id.to_string())
+        .fetch_optional(&mut **tx)
+        .await?
+        .as_ref()
+        .map(decode)
+        .transpose()
+}
+
+pub(crate) async fn insert_publication(
+    tx: &mut Transaction<'_, Sqlite>,
+    publication: &Publication,
+) -> StoreResult<()> {
+    let r = publication.record();
+    sqlx::query(
+        "INSERT INTO publications (id, asset_id, platform, state, current_revision,          account_id, variant_id, approval, schedule_at, schedule_tz, retry_at, user_action, \
+         last_error, published, owner, handover_id, version, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    )
+    .bind(r.id.to_string())
+    .bind(r.asset_id.to_string())
+    .bind(r.platform.as_str())
+    .bind(r.state.as_str())
+    .bind(i64::from(r.revision.number))
+    .bind(r.revision.content.destination.account_id.to_string())
+    .bind(r.revision.content.variant_id.to_string())
+    .bind(opt_json(r.approval.as_ref()))
+    .bind(opt_ts(r.schedule.map(|s| s.at)))
+    .bind(r.schedule.map(|s| s.timezone.name()))
+    .bind(opt_ts(r.retry_at))
+    .bind(opt_json(r.user_action.as_ref()))
+    .bind(&r.last_error)
+    .bind(opt_json(r.published.as_ref()))
+    .bind(r.owner.as_str())
+    .bind(r.handover.map(|h| h.to_string()))
+    .bind(to_i64(r.version))
+    .bind(ts(r.created_at))
+    .bind(ts(r.updated_at))
+    .execute(&mut **tx)
+    .await?;
+    insert_revision(tx, r.id, &r.revision).await?;
+    log(
+        tx,
+        r.id,
+        None,
+        r.state,
+        "created",
+        r.revision.number,
+        r.created_at,
+    )
+    .await
 }
 
 async fn insert_revision(
@@ -332,6 +372,18 @@ fn decode(row: &SqliteRow) -> StoreResult<Publication> {
         user_action: row.opt_json("user_action")?,
         last_error: row.opt_text("last_error")?,
         published: row.opt_json("published")?,
+        owner: {
+            let raw = row.text("owner")?;
+            ExecutionOwner::parse(&raw)
+                .ok_or_else(|| StoreError::Corrupt(format!("bad owner {raw:?}")))?
+        },
+        handover: row
+            .opt_text("handover_id")?
+            .map(|raw| {
+                raw.parse()
+                    .map_err(|_| StoreError::Corrupt(format!("bad handover id {raw:?}")))
+            })
+            .transpose()?,
         version: row.u64("version")?,
         created_at: row.time("created_at")?,
         updated_at: row.time("updated_at")?,

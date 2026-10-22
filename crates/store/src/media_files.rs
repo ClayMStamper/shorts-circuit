@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use shorts_domain::{AssetId, Checksum, MediaFile, MediaFileId};
 use sqlx::sqlite::SqliteRow;
 use sqlx::{SqliteConnection, SqlitePool};
@@ -59,6 +60,24 @@ impl<'a> MediaFiles<'a> {
             "SELECT {COLUMNS} FROM media_files WHERE asset_id = ? ORDER BY imported_at"
         ))
         .bind(asset_id.to_string())
+        .fetch_all(self.pool)
+        .await?
+        .iter()
+        .map(decode)
+        .collect()
+    }
+
+    /// Originals imported in `[from, to]`, oldest first.
+    pub async fn imported_between(
+        &self,
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    ) -> StoreResult<Vec<MediaFile>> {
+        sqlx::query(&format!(
+            "SELECT {COLUMNS} FROM media_files WHERE imported_at >= ? AND imported_at <= ?              ORDER BY imported_at"
+        ))
+        .bind(ts(from))
+        .bind(ts(to))
         .fetch_all(self.pool)
         .await?
         .iter()

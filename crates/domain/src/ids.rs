@@ -71,12 +71,29 @@ id_type!(
     PublicationId
 );
 id_type!(
+    /// Identifies a [`Workflow`](crate::Workflow).
+    WorkflowId
+);
+id_type!(
     /// Identifies a [`Job`](crate::Job).
     JobId
 );
 id_type!(
     /// Identifies a [`PublishAttempt`](crate::PublishAttempt).
     AttemptId
+);
+id_type!(
+    /// Identifies one hand-over of a publication to the cloud runner. Each hand-over gets a
+    /// new one, so a delivery retried after the publication was taken back is recognised.
+    HandoverId
+);
+id_type!(
+    /// Identifies a [`Collection`](crate::Collection).
+    CollectionId
+);
+id_type!(
+    /// Identifies a [`CollectionRule`](crate::CollectionRule).
+    RuleId
 );
 
 #[cfg(test)]

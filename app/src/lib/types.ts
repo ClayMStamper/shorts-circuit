@@ -39,7 +39,14 @@ export type Action =
   | "resolveUserAction"
   | "confirmPosted"
   | "resolveOutcome"
-  | "exportPackage";
+  | "exportPackage"
+  | "reconnect"
+  | "sendToCloud"
+  | "takeBack"
+  | "republish";
+
+/** Who runs a publication: this computer, or the optional cloud runner. */
+export type ExecutionOwner = "desktop" | "cloud";
 
 export type PermissionStatus = "unknown" | "granted" | "denied";
 
@@ -131,6 +138,60 @@ export interface AssetSummary {
   createdAt: string;
   media: MediaView | null;
   publicationCount: number;
+  /** The TikTok post this item came from (new-post detection). */
+  sourcePost: SourcePostView | null;
+}
+
+export interface SourcePostView {
+  videoId: string;
+  title: string;
+  caption: string;
+  postedAt: string;
+  durationMs: number | null;
+  shareUrl: string | null;
+  coverPath: string | null;
+  matched: boolean;
+}
+
+export interface MatchCandidateView {
+  assetId: string;
+  title: string;
+  originalName: string;
+  importedAt: string;
+  durationMs: number;
+}
+
+export interface MatchSuggestion {
+  postAssetId: string;
+  post: SourcePostView;
+  candidate: MatchCandidateView;
+  durationDiffMs: number;
+  hoursApart: number;
+}
+
+export type TikTokStatus =
+  | { kind: "unavailable"; reason: string; nextStep: string }
+  | { kind: "off" }
+  | { kind: "notConnected" }
+  | { kind: "connecting" }
+  | {
+      kind: "connected";
+      displayName: string;
+      connectedAt: string;
+      lastCheckedAt: string | null;
+      lastError: string | null;
+      pendingPosts: number;
+    }
+  | { kind: "reconnect"; displayName: string; message: string };
+
+export type ConnectProgress =
+  | { kind: "pending" }
+  | { kind: "connected"; status: TikTokStatus }
+  | { kind: "failed"; message: string };
+
+export interface CheckReport {
+  newPosts: number;
+  suggestions: number;
 }
 
 export interface RenderedView {
@@ -162,6 +223,12 @@ export interface AccountView {
   missingReason: string | null;
   nextAction: NextAction | null;
   manualHandoff: boolean;
+  /** Signed in through a platform API (rather than an export-package destination). */
+  connected: boolean;
+  /** Uploads end up private, e.g. while the YouTube API project is unaudited. */
+  privateOnly: boolean;
+  /** Plain-language limits: visibility, quota, sign-in lifetime. */
+  notes: string[];
 }
 
 export interface PublicationView {
@@ -187,13 +254,44 @@ export interface PublicationView {
   lastError: string | null;
   packageDir: string | null;
   publishedUrl: string | null;
+  /** E.g. "uploaded as private". */
+  publishedNote: string | null;
+  /** Upload progress 0–1 while uploading. */
+  progressFraction: number | null;
+  /** E.g. "YouTube is processing the video (50%)". */
+  progressText: string | null;
   statusText: string;
+  /** The short status pill: "Published", "Processing 40%", "Waiting for review", … */
+  statusLabel: string;
+  tone: Tone;
+  /** `owner`, `workflow:<name>` or `rule:<name>`. */
+  approvedBy: string | null;
+  /** While waiting for review: what would stop it from being approved. */
+  blockers: string[];
+  /** A YouTube upload that ended up private. */
+  publishedPrivate: boolean;
   actions: Action[];
+  owner: ExecutionOwner;
+  /** While the cloud runner owns it: a problem reaching the runner, if any. */
+  cloudNote: string | null;
   updatedAt: string;
+}
+
+/** Cloud mode (Settings → Cloud runner). Off until an address and token are saved. */
+export interface CloudStatus {
+  enabled: boolean;
+  url: string | null;
+  tokenSaved: boolean;
+  /** Publications the cloud runner owns right now. */
+  held: number;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  nextStep: string | null;
 }
 
 export interface AssetDetail {
   asset: AssetSummary;
+  collections: CollectionRef[];
   variants: VariantView[];
   publications: PublicationView[];
 }
@@ -254,6 +352,12 @@ export interface Preferences {
   watchFolder: string | null;
   exportDir: string | null;
   postingSlots: PostingSlot[];
+  /** Watch-folder imports are added to this collection (and its rules run). */
+  watchCollection: string | null;
+  /** When the watch folder was last listed. */
+  watchCheckedAt: string | null;
+  /** Also watched, only for videos downloaded from pending TikTok posts. Null = off. */
+  downloadsFolder: string | null;
 }
 
 export interface PreferencesUpdate {
@@ -262,6 +366,8 @@ export interface PreferencesUpdate {
   watchFolder?: string | null;
   exportDir?: string | null;
   postingSlots?: PostingSlot[];
+  watchCollection?: string | null;
+  downloadsFolder?: string | null;
 }
 
 export type ScheduleInput =
@@ -332,9 +438,338 @@ export type AppEvent =
   | { type: "publicationChanged"; id: string }
   | { type: "jobsChanged" }
   | { type: "renderProgress"; variantId: string; fraction: number }
-  | { type: "watchFolderError"; message: string };
+  | { type: "watchFolderError"; message: string }
+  | { type: "collectionsChanged" }
+  | { type: "rulesFailed"; assetId: string; message: string }
+  | { type: "tikTokChanged" }
+  | { type: "youTubeChanged" }
+  | { type: "instagramChanged" }
+  | { type: "linkedInChanged" }
+  | { type: "snapchatChanged" }
+  | { type: "cloudChanged" }
+  | { type: "watchFolderChecked" }
+  | { type: "matchSuggested"; assetId: string | null }
+  | { type: "originalAttached"; assetId: string; title: string };
+
+/** What "Get original" did. */
+export interface GetOriginal {
+  downloadsFolder: string | null;
+  /** Picking up downloads was off and has just been turned on. */
+  enabledNow: boolean;
+}
+
+export interface CollectionRef {
+  id: string;
+  name: string;
+}
+
+/** What a rule-created publication starts as. */
+export type RuleOutput = "draft" | "awaiting_approval";
+
+export interface RuleDestinationView {
+  accountId: string;
+  accountName: string;
+  platformName: string;
+  /** The rule approves these publications itself (unattended publishing is on). */
+  unattended: boolean;
+}
+
+export interface RuleView {
+  id: string;
+  name: string;
+  enabled: boolean;
+  destinations: RuleDestinationView[];
+  output: RuleOutput;
+  captionTemplate: string;
+  hashtags: string[];
+  includeAssetTags: boolean;
+  effectiveFrom: string;
+  /** What the rule does in plain words, including when it started. */
+  summary: string;
+  firedCount: number;
+}
+
+export interface RuleItemView {
+  assetId: string;
+  title: string;
+  caption: string;
+  durationMs: number | null;
+  sourcePostedAt: string | null;
+  /** The original post (e.g. its TikTok link), when known. */
+  sourceUrl: string | null;
+  /** "Get original" was clicked: a matching download is expected until then. */
+  expectingOriginalUntil: string | null;
+  /** Why a download wasn't taken for this post, e.g. a different length. */
+  downloadNote: string | null;
+  /** In the collection, but the original file hasn't arrived yet. */
+  waitingForMedia: boolean;
+  /** Why nothing has been created yet, e.g. waiting for its TikTok caption. */
+  waitingReason: string | null;
+  addedAt: string;
+  publications: PublicationView[];
+}
+
+export interface RuleActivityView {
+  rule: RuleView;
+  items: RuleItemView[];
+}
+
+export interface UnattendedView {
+  accountId: string;
+  accountName: string;
+  platformName: string;
+  enabled: boolean;
+  available: boolean;
+  unavailableReason: string | null;
+  enabledAt: string | null;
+}
+
+export interface CollectionView {
+  id: string;
+  name: string;
+  memberCount: number;
+  rules: RuleView[];
+  unattended: UnattendedView[];
+  watchFolderTarget: boolean;
+}
+
+export interface RuleInput {
+  name: string;
+  enabled: boolean;
+  destinations: string[];
+  output: RuleOutput;
+  captionTemplate: string;
+  hashtags: string[];
+  includeAssetTags: boolean;
+  /** Only videos entering from this instant; omitted means now (or unchanged when editing). */
+  effectiveFrom?: string | null;
+}
+
+export type Tone = "good" | "info" | "warn" | "bad" | "muted";
+
+export type PostingMode = "asap" | "slots";
+
+export type WorkflowStatus = "active" | "inactive" | "needs_reconnect";
+
+export interface WorkflowView {
+  id: string;
+  name: string;
+  ruleId: string;
+  accountId: string;
+  accountName: string;
+  platform: Platform;
+  platformName: string;
+  sourceName: string;
+  enabled: boolean;
+  autoPublish: boolean;
+  autoPublishAvailable: boolean;
+  status: WorkflowStatus;
+  statusText: string;
+  /** What the workflow does in plain words. */
+  banner: string;
+  rightsConfirmed: boolean;
+  posting: PostingMode;
+  shareToFeed: boolean | null;
+  captionTemplate: string;
+  hashtags: string[];
+  effectiveFrom: string;
+  privateOnly: boolean;
+  itemCount: number;
+  createdAt: string;
+}
+
+export interface WorkflowSuggestion {
+  accountId: string;
+  accountName: string;
+  platform: Platform;
+  platformName: string;
+  name: string;
+}
+
+export interface SourceView {
+  name: string;
+  watchFolder: string | null;
+  watchCheckedAt: string | null;
+  tiktokConnected: boolean;
+}
+
+export interface WorkflowsView {
+  workflows: WorkflowView[];
+  suggestions: WorkflowSuggestion[];
+  source: SourceView;
+}
+
+export interface WorkflowDetailView {
+  workflow: WorkflowView;
+  items: RuleItemView[];
+}
+
+export interface ActivityView {
+  items: RuleItemView[];
+}
+
+export interface NewWorkflow {
+  accountId: string;
+  name?: string | null;
+  autoPublish: boolean;
+  rightsConfirmed: boolean;
+  effectiveFrom?: string | null;
+  settings?: { posting: PostingMode; share_to_feed?: boolean | null };
+  captionTemplate?: string | null;
+  hashtags?: string[];
+}
+
+export interface WorkflowUpdate {
+  name?: string;
+  enabled?: boolean;
+  autoPublish?: boolean;
+  rightsConfirmed?: boolean;
+  posting?: PostingMode;
+  shareToFeed?: boolean | null;
+  captionTemplate?: string;
+  hashtags?: string[];
+  effectiveFrom?: string;
+}
+
+export interface TikTokAppInfo {
+  appConfigured: boolean;
+  clientKey: string | null;
+  brokerConfigured: boolean;
+  redirectUri: string;
+}
 
 export interface AppError {
   kind: string;
   message: string;
 }
+
+export interface QuotaReport {
+  day: string;
+  uploadsUsed: number;
+  uploadsLimit: number;
+  unitsUsed: number;
+  unitsLimit: number;
+  resetsAt: string;
+  warning: string | null;
+}
+
+export interface YouTubeChannel {
+  accountId: string;
+  displayName: string;
+  connected: boolean;
+  needsReconnect: boolean;
+  lastError: string | null;
+  privateOnly: boolean;
+  notes: string[];
+  connectedAt: string | null;
+  signInExpiresAt: string | null;
+}
+
+export interface YouTubeStatus {
+  clientConfigured: boolean;
+  nextStep: string | null;
+  connecting: boolean;
+  channels: YouTubeChannel[];
+  quota: QuotaReport;
+}
+
+/** How an Instagram account is connected. Only Facebook login uploads files. */
+export type InstagramLogin = "facebook_login" | "instagram_login";
+
+export interface InstagramAccount {
+  accountId: string;
+  displayName: string;
+  connected: boolean;
+  needsReconnect: boolean;
+  login: InstagramLogin | null;
+  /** Connected with Facebook login and able to publish. */
+  canPublish: boolean;
+  pageName: string | null;
+  username: string | null;
+  lastError: string | null;
+  notes: string[];
+  connectedAt: string | null;
+}
+
+export interface InstagramStatus {
+  accounts: InstagramAccount[];
+  /** What to do first, while no account publishes. */
+  nextStep: string | null;
+}
+
+/** A Facebook Page a pasted token manages. */
+export interface InstagramPageChoice {
+  pageId: string;
+  pageName: string;
+  /** The linked Instagram professional account, if any. */
+  instagramUsername: string | null;
+}
+
+export interface InstagramPages {
+  /** Pages with a linked Instagram account first. */
+  pages: InstagramPageChoice[];
+  /** Said when the token's lifetime couldn't be read. */
+  warning: string | null;
+}
+
+export interface LinkedInPage {
+  accountId: string;
+  displayName: string;
+  connected: boolean;
+  needsReconnect: boolean;
+  /** Less than a week left on the token. */
+  expiresSoon: boolean;
+  lastError: string | null;
+  notes: string[];
+  connectedAt: string | null;
+  tokenExpiresAt: string | null;
+}
+
+export interface LinkedInStatus {
+  pages: LinkedInPage[];
+  nextStep: string | null;
+}
+
+/** A Company Page a pasted token administers. */
+export interface LinkedInOrganization {
+  urn: string;
+  name: string;
+}
+
+export type YouTubeConnectProgress =
+  | { kind: "idle" }
+  | { kind: "pending" }
+  | { kind: "connected"; account: AccountView }
+  | { kind: "failed"; message: string };
+
+/** How a Snapchat sign-in comes back: the app's loopback port, or text the owner pastes. */
+export type ReturnMode = "loopback" | "paste";
+
+export interface SnapProfileView {
+  accountId: string;
+  displayName: string;
+  connected: boolean;
+  needsReconnect: boolean;
+  lastError: string | null;
+  notes: string[];
+  connectedAt: string | null;
+}
+
+export interface SnapStatus {
+  clientConfigured: boolean;
+  /** The redirect address saved with the Snap OAuth app (not secret), or the suggested default. */
+  redirectUri: string;
+  returnMode: ReturnMode;
+  nextStep: string | null;
+  /** A loopback sign-in is waiting for the browser. */
+  connecting: boolean;
+  /** A sign-in is waiting for the owner to paste the redirect page's text. */
+  awaitingCode: boolean;
+  profiles: SnapProfileView[];
+}
+
+export type SnapConnectProgress =
+  | { kind: "idle" }
+  | { kind: "pending" }
+  | { kind: "connected"; account: AccountView }
+  | { kind: "failed"; message: string };

@@ -3,6 +3,7 @@ use serde::{Serialize, Serializer};
 use shorts_adapters::AdapterError;
 use shorts_domain::TransitionError;
 use shorts_domain::asset::AssetError;
+use shorts_domain::collection::CollectionError;
 use shorts_domain::job::JobError;
 use shorts_domain::schedule::UnknownTimeZone;
 use shorts_domain::variant::VariantError;
@@ -21,6 +22,8 @@ pub enum AppError {
     #[error(transparent)]
     Asset(#[from] AssetError),
     #[error(transparent)]
+    Collection(#[from] CollectionError),
+    #[error(transparent)]
     Media(#[from] MediaError),
     #[error(transparent)]
     Adapter(#[from] AdapterError),
@@ -30,10 +33,16 @@ pub enum AppError {
     TimeZone(#[from] UnknownTimeZone),
     #[error("{0}")]
     Invalid(String),
+    /// A source connector (TikTok, the OAuth broker) failed.
+    #[error("{0}")]
+    Intake(String),
     #[error("{0} not found")]
     NotFound(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    /// The cloud runner couldn't be reached or refused.
+    #[error(transparent)]
+    Cloud(#[from] shorts_cloud::ClientError),
 }
 
 impl AppError {
@@ -41,13 +50,20 @@ impl AppError {
         match self {
             Self::Store(StoreError::NotFound { .. }) | Self::NotFound(_) => "not_found",
             Self::Store(StoreError::Conflict { .. }) => "conflict",
+            Self::Store(StoreError::DuplicateName { .. }) => "invalid",
             Self::Store(_) => "store",
             Self::Transition(_) => "transition",
-            Self::Variant(_) | Self::Asset(_) | Self::TimeZone(_) | Self::Invalid(_) => "invalid",
+            Self::Variant(_)
+            | Self::Asset(_)
+            | Self::Collection(_)
+            | Self::TimeZone(_)
+            | Self::Invalid(_) => "invalid",
             Self::Media(_) => "media",
             Self::Adapter(_) => "adapter",
             Self::Job(_) => "job",
             Self::Io(_) => "io",
+            Self::Intake(_) => "intake",
+            Self::Cloud(_) => "cloud",
         }
     }
 }

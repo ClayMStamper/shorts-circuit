@@ -1,8 +1,9 @@
-use std::sync::{Arc, OnceLock};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use chrono::{DateTime, Utc};
-use shorts_adapters::{AdapterRegistry, ManualHandoff};
-use shorts_domain::JobKind;
+use shorts_adapters::{AdapterRegistry, ErasedAdapter, ManualHandoff};
+use shorts_domain::{JobKind, Platform, PublicationId};
 use shorts_scheduler::{Clock, Worker, WorkerConfig};
 use shorts_store::Store;
 use tokio::sync::broadcast;
@@ -12,17 +13,23 @@ use crate::error::AppResult;
 use crate::events::AppEvent;
 use crate::media::MediaBackend;
 use crate::paths::AppPaths;
-use crate::pipeline::{ExportHandler, PublishHandler, RenderHandler};
+use crate::pipeline::{DesktopHost, ExportHandler, RenderHandler};
 
 /// The application core used by the desktop shell.
 pub struct App {
     pub(crate) store: Store,
     pub(crate) media: Arc<dyn MediaBackend>,
     pub(crate) paths: AppPaths,
-    pub(crate) adapters: AdapterRegistry,
+    adapters: RwLock<AdapterRegistry>,
     pub(crate) clock: Arc<dyn Clock>,
     events: broadcast::Sender<AppEvent>,
     worker: OnceLock<Arc<Worker>>,
+    /// Problems reaching the cloud runner, per cloud-owned publication (set by the sync).
+    cloud_notes: Mutex<HashMap<PublicationId, String>>,
+    /// TikTok posts the owner asked to download ("Get original"), by video id.
+    pub(crate) expected_originals: Mutex<HashMap<String, DateTime<Utc>>>,
+    /// Why a download wasn't taken for a requested post, e.g. a different length, by video id.
+    pub(crate) download_notes: Mutex<HashMap<String, String>>,
 }
 
 impl App {
@@ -40,10 +47,13 @@ impl App {
             store,
             media,
             paths,
-            adapters,
+            adapters: RwLock::new(adapters),
             clock,
             events,
             worker: OnceLock::new(),
+            cloud_notes: Mutex::new(HashMap::new()),
+            expected_originals: Mutex::new(HashMap::new()),
+            download_notes: Mutex::new(HashMap::new()),
         }))
     }
 
@@ -53,6 +63,22 @@ impl App {
 
     pub fn paths(&self) -> &AppPaths {
         &self.paths
+    }
+
+    /// Adds (or replaces) the adapter for its platform, e.g. once a connector is set up.
+    pub fn register_adapter(&self, adapter: Arc<dyn ErasedAdapter>) {
+        self.adapters
+            .write()
+            .expect("adapters lock")
+            .register(adapter);
+    }
+
+    pub(crate) fn adapter(&self, platform: Platform) -> Option<Arc<dyn ErasedAdapter>> {
+        self.adapters.read().expect("adapters lock").get(platform)
+    }
+
+    pub(crate) fn clock(&self) -> Arc<dyn Clock> {
+        self.clock.clone()
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<AppEvent> {
@@ -92,7 +118,9 @@ impl App {
         );
         worker.register(
             JobKind::PublishPublication,
-            Arc::new(PublishHandler::new(weak.clone())),
+            Arc::new(shorts_publish::PublishHandler::new(Arc::new(
+                DesktopHost::new(weak.clone()),
+            ))),
         );
         worker.register(JobKind::ExportPackage, Arc::new(ExportHandler::new(weak)));
         let worker = Arc::new(worker);
@@ -119,5 +147,25 @@ impl App {
 
     pub(crate) fn running_worker(&self) -> Option<&Arc<Worker>> {
         self.worker.get()
+    }
+
+    pub(crate) fn cloud_note(&self, id: PublicationId) -> Option<String> {
+        self.cloud_notes
+            .lock()
+            .expect("cloud notes")
+            .get(&id)
+            .cloned()
+    }
+
+    pub(crate) fn set_cloud_note(&self, id: PublicationId, note: Option<String>) {
+        let mut notes = self.cloud_notes.lock().expect("cloud notes");
+        let changed = match note {
+            Some(n) => notes.insert(id, n.clone()).as_ref() != Some(&n),
+            None => notes.remove(&id).is_some(),
+        };
+        drop(notes);
+        if changed {
+            self.emit(AppEvent::PublicationChanged { id: id.to_string() });
+        }
     }
 }

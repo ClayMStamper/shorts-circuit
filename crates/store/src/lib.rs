@@ -8,16 +8,21 @@ mod accounts;
 mod assets;
 mod attempts;
 mod codec;
+mod collections;
 mod jobs;
 mod media_files;
 mod publications;
+mod quota;
 mod settings;
+mod tiktok;
 mod variants;
+mod workflows;
 
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
+use sha2::{Digest, Sha384};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use thiserror::Error;
@@ -25,13 +30,58 @@ use thiserror::Error;
 pub use accounts::Accounts;
 pub use assets::{AssetFilter, Assets};
 pub use attempts::Attempts;
+pub use collections::{CollectionSummary, Collections};
 pub use jobs::{JobFilter, Jobs};
 pub use media_files::MediaFiles;
 pub use publications::{PublicationFilter, PublicationLogEntry, Publications};
+pub use quota::Quota;
 pub use settings::Settings;
+pub use tiktok::TikTokPosts;
 pub use variants::Variants;
+pub use workflows::Workflows;
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
+/// SQLx refuses to open a database whose recorded checksum for an applied migration differs from
+/// the file's. Git may check the same migration out with LF or CRLF line endings, which changes
+/// the checksum without changing the migration, so before migrating, a recorded checksum that
+/// matches the current file with only its line endings changed is brought up to date. Any other
+/// difference still fails: shipped migrations must never be edited (add a new one instead).
+async fn reconcile_line_endings(pool: &SqlitePool) -> StoreResult<()> {
+    let applied: Option<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
+    )
+    .fetch_optional(pool)
+    .await?;
+    if applied.is_none() {
+        return Ok(());
+    }
+    for migration in MIGRATOR.iter() {
+        let lf = migration.sql.replace("\r\n", "\n");
+        let crlf = lf.replace('\n', "\r\n");
+        for variant in [lf, crlf] {
+            let other = Sha384::digest(variant.as_bytes()).to_vec();
+            if other.as_slice() == migration.checksum.as_ref() {
+                continue;
+            }
+            let updated = sqlx::query(
+                "UPDATE _sqlx_migrations SET checksum = ? WHERE version = ? AND checksum = ?",
+            )
+            .bind(migration.checksum.as_ref())
+            .bind(migration.version)
+            .bind(other)
+            .execute(pool)
+            .await?;
+            if updated.rows_affected() > 0 {
+                tracing::info!(
+                    version = migration.version,
+                    "migration checksum updated after a line-ending-only change"
+                );
+            }
+        }
+    }
+    Ok(())
+}
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -46,11 +96,18 @@ pub enum StoreError {
     Conflict { entity: &'static str, id: String },
     #[error("a file with checksum {checksum} is already in the library")]
     DuplicateMedia { checksum: String },
+    #[error("the name {name:?} is already taken")]
+    DuplicateName { name: String },
+    #[error("there is already a workflow from this source to that account")]
+    DuplicateWorkflow { collection: String, account: String },
     #[error("an open {kind} job already exists for {subject}")]
     DuplicateOpenJob { kind: String, subject: String },
     /// A job transition was refused, e.g. the caller no longer holds the lease.
     #[error(transparent)]
     Job(#[from] shorts_domain::job::JobError),
+    /// A publication change chosen inside a store transaction was refused by the domain.
+    #[error(transparent)]
+    Transition(#[from] shorts_domain::TransitionError),
     #[error("stored data is invalid: {0}")]
     Corrupt(String),
 }
@@ -104,6 +161,7 @@ impl Store {
             .max_connections(8)
             .connect_with(options)
             .await?;
+        reconcile_line_endings(&pool).await?;
         MIGRATOR.run(&pool).await?;
         Ok(Self { pool })
     }
@@ -152,6 +210,22 @@ impl Store {
         Attempts::new(&self.pool)
     }
 
+    pub fn collections(&self) -> Collections<'_> {
+        Collections::new(&self.pool)
+    }
+
+    pub fn tiktok_posts(&self) -> TikTokPosts<'_> {
+        TikTokPosts::new(&self.pool)
+    }
+
+    pub fn quota(&self) -> Quota<'_> {
+        Quota::new(&self.pool)
+    }
+
+    pub fn workflows(&self) -> Workflows<'_> {
+        Workflows::new(&self.pool)
+    }
+
     pub fn settings(&self) -> Settings<'_> {
         Settings::new(&self.pool)
     }
@@ -175,5 +249,125 @@ impl Store {
         variants::insert_variant(&mut tx, variant).await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Records a newly noticed TikTok post with its awaiting-media item. Returns false, writing
+    /// nothing, when the post is already known.
+    pub async fn record_tiktok_post(
+        &self,
+        asset: &shorts_domain::Asset,
+        post: &shorts_domain::TikTokPost,
+    ) -> StoreResult<bool> {
+        if post.asset_id != asset.id {
+            return Err(StoreError::Corrupt(
+                "TikTok post does not match its item".into(),
+            ));
+        }
+        let mut tx = self.pool.begin().await?;
+        assets::insert_asset(&mut tx, asset).await?;
+        if !tiktok::insert_post(&mut tx, post).await? {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    /// Confirms that `target` holds the original of TikTok post `video_id`: `target` (already
+    /// carrying the post's details) takes over the post and the awaiting item's collections,
+    /// and the awaiting item is removed. All or nothing.
+    pub async fn merge_tiktok_match(
+        &self,
+        video_id: &str,
+        awaiting: shorts_domain::AssetId,
+        target: &shorts_domain::Asset,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> StoreResult<()> {
+        let mut tx = self.pool.begin().await?;
+        tiktok::merge(&mut tx, video_id, awaiting, target, at).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Hands publication `id` to the cloud runner under `handover`, in one `BEGIN IMMEDIATE`
+    /// transaction (the same write lock [`Jobs::claim_next`] takes, so the desktop worker can't
+    /// claim its job in between). `reached_provider` reads the open publish job's checkpoint;
+    /// the domain refuses the hand-over if that job is running or already reached the
+    /// platform. The open job is cancelled, so the desktop never runs it.
+    pub async fn hand_over_to_cloud(
+        &self,
+        id: shorts_domain::PublicationId,
+        handover: shorts_domain::HandoverId,
+        now: chrono::DateTime<chrono::Utc>,
+        reached_provider: impl FnOnce(&shorts_domain::Job) -> bool,
+    ) -> StoreResult<shorts_domain::Publication> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let result = async {
+            let mut publication = publications::get_publication(&mut tx, id)
+                .await?
+                .ok_or_else(|| StoreError::not_found("publication", id))?;
+            let subject = id.to_string();
+            let job = jobs::open_for_tx(
+                &mut tx,
+                shorts_domain::JobKind::PublishPublication,
+                &subject,
+            )
+            .await?;
+            let execution = shorts_domain::Execution {
+                job_running: job
+                    .as_ref()
+                    .is_some_and(|j| j.state() == shorts_domain::JobState::Running),
+                reached_provider: job.as_ref().is_some_and(reached_provider),
+            };
+            let transition = publication.apply(
+                shorts_domain::PublicationEvent::HandToCloud {
+                    handover,
+                    execution,
+                },
+                now,
+            )?;
+            if let Some(mut job) = job {
+                let loaded = job.version();
+                job.cancel(now)?;
+                jobs::write_tx(&mut tx, &job, loaded).await?;
+            }
+            publications::save_publication(&mut tx, &publication, &transition).await?;
+            Ok(publication)
+        }
+        .await;
+        // Roll back right away on a refusal, so the write lock isn't held until the
+        // connection's next use.
+        match result {
+            Ok(p) => {
+                tx.commit().await?;
+                Ok(p)
+            }
+            Err(e) => {
+                tx.rollback().await?;
+                Err(e)
+            }
+        }
+    }
+
+    /// Records that a rule created `publication`, inserting both in one transaction. Returns
+    /// false, writing nothing, when the rule already fired for this asset and account.
+    pub async fn record_rule_firing(
+        &self,
+        firing: &shorts_domain::RuleFiring,
+        publication: &shorts_domain::Publication,
+    ) -> StoreResult<bool> {
+        if firing.publication_id != publication.id() || firing.asset_id != publication.asset_id() {
+            return Err(StoreError::Corrupt(
+                "rule firing does not match its publication".into(),
+            ));
+        }
+        let mut tx = self.pool.begin().await?;
+        publications::insert_publication(&mut tx, publication).await?;
+        if !collections::insert_firing(&mut tx, firing).await? {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        tx.commit().await?;
+        Ok(true)
     }
 }

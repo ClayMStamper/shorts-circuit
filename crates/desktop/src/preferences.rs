@@ -1,5 +1,6 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use shorts_domain::{OverduePolicy, TimeZoneName};
+use shorts_domain::{CollectionId, OverduePolicy, TimeZoneName};
 use shorts_scheduler::{PostingPlan, PostingSlot};
 
 use crate::app::App;
@@ -10,6 +11,9 @@ const OVERDUE: &str = "overdue_policy";
 const WATCH_FOLDER: &str = "watch_folder";
 const EXPORT_DIR: &str = "export_dir";
 const POSTING_SLOTS: &str = "posting_slots";
+const WATCH_COLLECTION: &str = "watch_collection";
+const WATCH_CHECKED: &str = "watch_checked_at";
+const DOWNLOADS_FOLDER: &str = "downloads_folder";
 
 /// User preferences. The posting slots are interpreted in `timezone`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -20,6 +24,13 @@ pub struct Preferences {
     pub watch_folder: Option<String>,
     pub export_dir: Option<String>,
     pub posting_slots: Vec<PostingSlot>,
+    /// Watch-folder imports are added to this collection (and its rules run).
+    pub watch_collection: Option<CollectionId>,
+    /// When the watch folder was last listed (read-only).
+    pub watch_checked_at: Option<DateTime<Utc>>,
+    /// Also watched, but only for videos downloaded from a pending TikTok post (e.g. TikTok's
+    /// own "Download video"); anything else there is left alone. `None` = off.
+    pub downloads_folder: Option<String>,
 }
 
 impl Preferences {
@@ -42,14 +53,18 @@ pub struct PreferencesUpdate {
     #[serde(default, with = "double_option")]
     pub export_dir: Option<Option<String>>,
     pub posting_slots: Option<Vec<PostingSlot>>,
+    #[serde(default, with = "double_option")]
+    pub watch_collection: Option<Option<CollectionId>>,
+    #[serde(default, with = "double_option")]
+    pub downloads_folder: Option<Option<String>>,
 }
 
 mod double_option {
     use serde::{Deserialize, Deserializer};
 
-    pub fn deserialize<'de, D: Deserializer<'de>>(
+    pub fn deserialize<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
         d: D,
-    ) -> Result<Option<Option<String>>, D::Error> {
+    ) -> Result<Option<Option<T>>, D::Error> {
         Ok(Some(Option::deserialize(d)?))
     }
 }
@@ -66,7 +81,25 @@ impl App {
             watch_folder: settings.get(WATCH_FOLDER).await?.flatten(),
             export_dir: settings.get(EXPORT_DIR).await?.flatten(),
             posting_slots: settings.get(POSTING_SLOTS).await?.unwrap_or_default(),
+            watch_collection: settings.get(WATCH_COLLECTION).await?.flatten(),
+            watch_checked_at: settings.get(WATCH_CHECKED).await?,
+            downloads_folder: settings.get(DOWNLOADS_FOLDER).await?.flatten(),
         })
+    }
+
+    pub(crate) async fn record_watch_check(&self) {
+        if let Err(e) = self.store.settings().set(WATCH_CHECKED, &self.now()).await {
+            tracing::warn!(error = %e, "could not record the watch folder check");
+        }
+        self.emit(crate::events::AppEvent::WatchFolderChecked);
+    }
+
+    pub(crate) async fn clear_watch_collection(&self) -> AppResult<()> {
+        self.store
+            .settings()
+            .set(WATCH_COLLECTION, &None::<CollectionId>)
+            .await?;
+        Ok(())
     }
 
     /// Records the OS timezone on first launch; an explicit user choice is never overwritten.
@@ -99,11 +132,26 @@ impl App {
             }
             settings.set(WATCH_FOLDER, &folder).await?;
         }
+        if let Some(folder) = update.downloads_folder {
+            if let Some(f) = &folder
+                && !std::path::Path::new(f).is_dir()
+            {
+                return Err(AppError::Invalid(format!("{f} is not a folder")));
+            }
+            settings.set(DOWNLOADS_FOLDER, &folder).await?;
+        }
         if let Some(dir) = update.export_dir {
             settings.set(EXPORT_DIR, &dir).await?;
         }
         if let Some(slots) = update.posting_slots {
             settings.set(POSTING_SLOTS, &slots).await?;
+        }
+        if let Some(collection) = update.watch_collection {
+            if let Some(id) = collection {
+                self.store.collections().require(id).await?;
+            }
+            settings.set(WATCH_COLLECTION, &collection).await?;
+            self.emit(crate::events::AppEvent::CollectionsChanged);
         }
         self.preferences().await
     }

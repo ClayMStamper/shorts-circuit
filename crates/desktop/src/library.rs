@@ -3,13 +3,14 @@
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
+use shorts_domain::copy::Sidecar;
 use shorts_domain::{
     Asset, AssetId, AssetStatus, MediaFile, MediaFileId, PermissionStatus, Rating, RenderRecipe,
     Tag, Variant,
 };
 use shorts_media::MediaError;
 use shorts_store::{AssetFilter, PublicationFilter, StoreError};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::app::App;
 use crate::error::{AppError, AppResult};
@@ -120,7 +121,13 @@ impl App {
                 }
                 (asset, false)
             }
-            None => (Asset::imported(&title_from(path), now)?, true),
+            None => {
+                let mut asset = Asset::imported(&title_from(path), now)?;
+                if let Some(sidecar) = read_sidecar(path).await {
+                    asset.notes = sidecar.caption_with_hashtags();
+                }
+                (asset, true)
+            }
         };
         asset.mark_media_attached(now);
 
@@ -172,7 +179,60 @@ impl App {
             duplicate: false,
         });
         self.emit(AppEvent::LibraryChanged);
+        if !new_asset {
+            // A saved link got its media: rules of collections it is already in can fire now.
+            self.apply_rules_quietly(asset.id).await;
+        }
         Ok(ImportOutcome::Imported { asset_id: asset.id })
+    }
+
+    /// A watch-folder import: imports the file, then adds the asset to the collection chosen
+    /// in preferences (if any), which runs that collection's rules. Duplicates are routed too;
+    /// membership and rule firings are idempotent, so nothing is created twice.
+    pub async fn import_watched(&self, path: &Path) -> AppResult<ImportOutcome> {
+        let outcome = self.import_file(path, None).await?;
+        if matches!(outcome, ImportOutcome::Imported { .. }) {
+            // A detected TikTok post this file is unambiguously the original of gives it the
+            // post's caption before any workflow uses it.
+            self.auto_match().await;
+        }
+        self.route_watched(outcome.asset_id()).await;
+        if let ImportOutcome::Imported { asset_id } = outcome {
+            self.suggest_matches_for(asset_id).await;
+        }
+        Ok(outcome)
+    }
+
+    /// Adds a watch-folder import to the routed collection. Failures are reported as events,
+    /// never as a failed import.
+    pub(crate) async fn route_watched(&self, asset_id: AssetId) {
+        let collection = match self.preferences().await {
+            Ok(prefs) => prefs.watch_collection,
+            Err(e) => {
+                warn!(error = %e, "could not read preferences");
+                return;
+            }
+        };
+        let Some(collection) = collection else { return };
+        match self.add_to_collection(collection, asset_id).await {
+            Ok(_) => {}
+            Err(AppError::Store(StoreError::NotFound {
+                entity: "collection",
+                ..
+            })) => {
+                warn!(%collection, "watch-folder collection is gone; routing turned off");
+                if let Err(e) = self.clear_watch_collection().await {
+                    warn!(error = %e, "could not turn routing off");
+                }
+            }
+            Err(e) => {
+                warn!(asset = %asset_id, error = %e, "watch-folder routing failed");
+                self.emit(AppEvent::RulesFailed {
+                    asset_id: asset_id.to_string(),
+                    message: e.to_string(),
+                });
+            }
+        }
     }
 
     /// Copies an original into the managed folder as `<checksum>.<ext>` and marks it read-only.
@@ -282,6 +342,13 @@ impl App {
             created_at: asset.created_at,
             media,
             publication_count,
+            source_post: self
+                .store
+                .tiktok_posts()
+                .for_asset(asset.id)
+                .await?
+                .as_ref()
+                .map(crate::views::SourcePostView::from),
         })
     }
 
@@ -304,6 +371,7 @@ impl App {
             publications.push(self.publication_view(&p).await?);
         }
         Ok(AssetDetail {
+            collections: self.asset_collections(id).await?,
             asset: self.summary(asset).await?,
             variants,
             publications,
@@ -365,7 +433,8 @@ impl App {
             .collect())
     }
 
-    /// A poster frame for the asset (generated on first request), or `None` without media.
+    /// A poster frame for the asset (generated on first request); for a TikTok post still
+    /// waiting for its file, the saved cover; otherwise `None`.
     pub async fn thumbnail(&self, id: AssetId) -> AppResult<Option<PathBuf>> {
         let Some(media) = self
             .store
@@ -375,11 +444,43 @@ impl App {
             .into_iter()
             .next()
         else {
-            return Ok(None);
+            let cover = self
+                .store
+                .tiktok_posts()
+                .for_asset(id)
+                .await?
+                .and_then(|p| p.cover_path)
+                .map(PathBuf::from)
+                .filter(|p| p.is_file());
+            return Ok(cover);
         };
         let at_ms = (media.properties.duration_ms / 10).min(1_000);
         Ok(Some(self.media.thumbnail(&media, at_ms).await?))
     }
+}
+
+/// The caption file an editor or scheduler left next to the video: `<name>.json`, else
+/// `<name>.txt`. Missing, unreadable, oversized or empty files are ignored.
+async fn read_sidecar(video: &Path) -> Option<Sidecar> {
+    for (ext, parse) in [
+        ("json", Sidecar::from_json as fn(&str) -> Option<Sidecar>),
+        ("txt", Sidecar::from_text),
+    ] {
+        let path = video.with_extension(ext);
+        let Ok(meta) = tokio::fs::metadata(&path).await else {
+            continue;
+        };
+        if !meta.is_file() || meta.len() > Sidecar::MAX_BYTES {
+            continue;
+        }
+        let Ok(bytes) = tokio::fs::read(&path).await else {
+            continue;
+        };
+        if let Some(sidecar) = parse(&String::from_utf8_lossy(&bytes)) {
+            return Some(sidecar);
+        }
+    }
+    None
 }
 
 fn title_from(path: &Path) -> String {

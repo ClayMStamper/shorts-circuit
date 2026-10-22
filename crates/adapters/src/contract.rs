@@ -37,15 +37,25 @@ pub enum UploadProgress<C, M> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Processing {
-    Pending { poll_after: Duration },
+    Pending {
+        poll_after: Duration,
+        /// What the provider says it is doing, for the UI.
+        #[serde(default)]
+        detail: Option<String>,
+    },
     Ready,
-    Failed { message: String },
+    Failed {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PublishedPost<P> {
     pub remote_id: String,
     pub url: Option<String>,
+    /// Something the user should know about the result, e.g. "uploaded as private".
+    #[serde(default)]
+    pub note: Option<String>,
     pub post: P,
 }
 
@@ -190,6 +200,7 @@ fn erase_post<P: Serialize>(post: PublishedPost<P>) -> Result<PublishedPost<Valu
     Ok(PublishedPost {
         remote_id: post.remote_id,
         url: post.url,
+        note: post.note,
         post: to_json(&post.post)?,
     })
 }

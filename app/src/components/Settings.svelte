@@ -3,11 +3,24 @@
   import { api } from "../lib/api";
   import { platformLabel } from "../lib/format";
   import { pickFolder } from "../lib/tauri";
-  import { PLATFORMS, WEEKDAYS, type AccountView, type Platform, type Preferences, type PostingSlot, type Weekday } from "../lib/types";
+  import {
+    PLATFORMS,
+    WEEKDAYS,
+    type AccountView,
+    type CollectionView,
+    type Platform,
+    type Preferences,
+    type PostingSlot,
+    type Weekday,
+  } from "../lib/types";
   import { errorToast, toast } from "./Toasts.svelte";
+
+  type Advanced = "library" | "collections" | "monitor";
+  let { revision = 0, onAdvanced }: { revision?: number; onAdvanced?: (to: Advanced) => void } = $props();
 
   let prefs = $state<Preferences | null>(null);
   let accounts = $state<AccountView[]>([]);
+  let collections = $state<CollectionView[]>([]);
   let zones = $state<string[]>([]);
   let graceMinutes = $state(15);
   let newPlatform = $state<Platform>("youtube_shorts");
@@ -26,7 +39,11 @@
 
   async function load() {
     try {
-      [prefs, accounts] = await Promise.all([api.preferences(), api.listAccounts()]);
+      [prefs, accounts, collections] = await Promise.all([
+        api.preferences(),
+        api.listAccounts(),
+        api.listCollections(),
+      ]);
       if (prefs.overduePolicy.kind === "expire") graceMinutes = Math.round(prefs.overduePolicy.grace_secs / 60);
       if (!zones.includes(prefs.timezone)) zones = [prefs.timezone, ...zones];
     } catch (e) {
@@ -41,11 +58,6 @@
     } catch (e) {
       errorToast(e);
     }
-  }
-
-  async function chooseWatchFolder() {
-    const dir = await pickFolder();
-    if (dir) update({ watchFolder: dir }, "Watching folder");
   }
 
   async function chooseExportDir() {
@@ -76,8 +88,13 @@
   }
 </script>
 
-<section class="settings">
-  <h1>Settings</h1>
+<section class="settings page">
+  <div class="page-head">
+    <div>
+      <h1>Settings</h1>
+      <p class="subtitle">Rarely used options. Accounts and the watch folder are in Connections.</p>
+    </div>
+  </div>
   {#if prefs}
     <fieldset>
       <legend>Time</legend>
@@ -141,18 +158,13 @@
     </fieldset>
 
     <fieldset>
-      <legend>Folders</legend>
-      <p>
-        Watch folder: <code>{prefs.watchFolder ?? "none"}</code>
-        <button onclick={chooseWatchFolder}>Choose…</button>
-        {#if prefs.watchFolder}<button onclick={() => update({ watchFolder: null }, "Stopped watching")}>Stop watching</button>{/if}
-      </p>
-      <p class="muted">New videos saved here (for example exports from TikTok or an editor) are imported automatically once they finish writing.</p>
+      <legend>Export packages</legend>
       <p>
         Export packages go to: <code>{prefs.exportDir ?? "the app's data folder"}</code>
         <button onclick={chooseExportDir}>Choose…</button>
         {#if prefs.exportDir}<button onclick={() => update({ exportDir: null })}>Use default</button>{/if}
       </p>
+      <p class="muted">For destinations without a connection: a folder with the video, caption and posting steps.</p>
     </fieldset>
 
     <fieldset>
@@ -161,7 +173,13 @@
         {#each accounts as a (a.id)}
           <li>
             <strong>{a.platformName}</strong> · {a.displayName}
-            <span class="muted">{a.automatic ? "automatic publishing" : `export package — ${a.missingReason ?? ""}`}</span>
+            <span class="muted">
+              {#if a.automatic}
+                uploads automatically{a.privateOnly ? " (as private until the API audit)" : ""}
+              {:else}
+                export package — {a.missingReason ?? ""}
+              {/if}
+            </span>
           </li>
         {/each}
       </ul>
@@ -173,9 +191,33 @@
         <button type="submit">Add account</button>
       </form>
       <p class="muted">
-        Platform sign-in isn't available yet, so every account publishes through export packages: a folder with the
-        rendered video, caption and step-by-step posting instructions.
+        Connect YouTube channels, Instagram accounts, LinkedIn pages and Snapchat profiles in Connections to publish
+        automatically. Accounts added here publish through export packages instead.
       </p>
+    </fieldset>
+
+    <fieldset>
+      <legend>Advanced</legend>
+      <p class="muted">
+        The building blocks under workflows. You don't need these day to day: workflows render, caption and publish on
+        their own.
+      </p>
+      <div class="advanced-nav">
+        <button onclick={() => onAdvanced?.("library")}>Library</button>
+        <button onclick={() => onAdvanced?.("collections")}>Collections and rules</button>
+        <button onclick={() => onAdvanced?.("monitor")}>Monitor and jobs</button>
+      </div>
+      <label>
+        Put watch-folder imports in
+        <select
+          value={prefs.watchCollection ?? ""}
+          onchange={(e) => update({ watchCollection: e.currentTarget.value || null })}
+        >
+          <option value="">no collection</option>
+          {#each collections as c (c.id)}<option value={c.id}>{c.name}</option>{/each}
+        </select>
+      </label>
+      <p class="muted">Workflows use this collection (created as "Source videos"). Changing it moves where new videos go.</p>
     </fieldset>
   {/if}
 </section>

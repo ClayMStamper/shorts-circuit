@@ -5,9 +5,10 @@ use serde::Deserialize;
 use serde_json::json;
 use shorts_domain::platform::full_caption;
 use shorts_domain::{
-    AccountId, AssetId, Destination, Job, JobKind, JobState, MediaProperties, OutcomeResolution,
-    PermissionStatus, Publication, PublicationEvent, PublicationId, PublicationState,
-    RevisionContent, Schedule, TimeZoneName, UserAction, ValidationIssue, VariantId,
+    AccountId, AssetId, Destination, ExecutionOwner, Job, JobKind, JobState, MediaProperties,
+    OutcomeResolution, PermissionStatus, Publication, PublicationEvent, PublicationId,
+    PublicationState, RevisionContent, Schedule, TimeZoneName, UserAction, ValidationIssue,
+    VariantId,
 };
 use shorts_scheduler::resolve_local;
 use shorts_store::{PublicationFilter, StoreError};
@@ -24,7 +25,17 @@ const PUBLISH_MAX_FAILURES: u32 = 6;
 const SLOT_GAP_MINUTES: i64 = 30;
 const SLOT_HORIZON_DAYS: u32 = 28;
 /// The person approving. There is one user per desktop library for now.
-const APPROVER: &str = "owner";
+pub(crate) const APPROVER: &str = "owner";
+
+/// What review flags for a publication (see [`App::checks`]).
+pub(crate) struct Checks {
+    pub(crate) video_path: Option<String>,
+    pub(crate) issues: Vec<ValidationIssue>,
+    pub(crate) warnings: Vec<String>,
+    pub(crate) can_approve: bool,
+    /// Video permission is recorded as denied, which no workflow overrides.
+    pub(crate) video_denied: bool,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(
@@ -174,12 +185,31 @@ impl App {
     /// should block or worry the reviewer.
     pub async fn review(&self, id: PublicationId) -> AppResult<ReviewView> {
         let p = self.store.publications().require(id).await?;
+        let checks = self.checks(&p).await?;
         let content = p.content();
         let account = self
             .store
             .accounts()
             .require(content.destination.account_id)
             .await?;
+        let variant = self.store.variants().require(content.variant_id).await?;
+        Ok(ReviewView {
+            publication: self.publication_view(&p).await?,
+            account: AccountView::from(&account),
+            variant: self.variant_view(&variant).await?,
+            video_path: checks.video_path,
+            full_caption: full_caption(&content.caption, &content.hashtags),
+            issue_text: checks.issues.iter().map(ToString::to_string).collect(),
+            issues: checks.issues,
+            warnings: checks.warnings,
+            can_approve: checks.can_approve,
+        })
+    }
+
+    /// What review would flag for `p`: blocking issues, warnings, and whether it can be
+    /// approved now.
+    pub(crate) async fn checks(&self, p: &Publication) -> AppResult<Checks> {
+        let content = p.content();
         let variant = self.store.variants().require(content.variant_id).await?;
         let asset = self.store.assets().require(p.asset_id()).await?;
         let media = self
@@ -243,21 +273,27 @@ impl App {
             && p.schedule().is_some()
             && rendered.is_some()
             && !stale_media;
-        Ok(ReviewView {
-            publication: self.publication_view(&p).await?,
-            account: AccountView::from(&account),
-            variant: self.variant_view(&variant).await?,
+        Ok(Checks {
             video_path: rendered.map(|r| r.path.clone()),
-            full_caption: full_caption(&content.caption, &content.hashtags),
-            issue_text: issues.iter().map(ToString::to_string).collect(),
             issues,
             warnings,
             can_approve,
+            video_denied: asset.video_permission.status == PermissionStatus::Denied,
         })
     }
 
     /// Approves `revision`, which must be the current one, with its rendered media.
     pub async fn approve(&self, id: PublicationId, revision: u32) -> AppResult<PublicationView> {
+        self.approve_as(id, revision, APPROVER).await
+    }
+
+    /// Approval recorded under `by` (the owner, or a rule under an unattended grant).
+    pub(crate) async fn approve_as(
+        &self,
+        id: PublicationId,
+        revision: u32,
+        by: &str,
+    ) -> AppResult<PublicationView> {
         let current = self.store.publications().require(id).await?;
         let variant = self
             .store
@@ -277,7 +313,7 @@ impl App {
             .transition(id, move |_| PublicationEvent::Approve {
                 revision,
                 current_variant_revision: variant_revision,
-                by: APPROVER.to_owned(),
+                by: by.to_owned(),
             })
             .await?;
         self.publication_view(&p).await
@@ -309,6 +345,64 @@ impl App {
     pub async fn cancel_publication(&self, id: PublicationId) -> AppResult<PublicationView> {
         let p = self.transition(id, |_| PublicationEvent::Cancel).await?;
         self.publication_view(&p).await
+    }
+
+    /// "Publish now": a publication waiting for review is approved (as the owner) to go out
+    /// now; an approved one is moved to now. Needs the rendered video.
+    pub async fn publish_now(&self, id: PublicationId) -> AppResult<PublicationView> {
+        let current = self.store.publications().require(id).await?;
+        let now_schedule = ScheduleInput::Now;
+        match current.state() {
+            PublicationState::AwaitingApproval => {
+                self.schedule(id, now_schedule).await?;
+                let p = self.store.publications().require(id).await?;
+                self.approve(id, p.revision().number).await
+            }
+            PublicationState::Draft => {
+                self.submit_for_review(id).await?;
+                Box::pin(self.publish_now(id)).await
+            }
+            _ => self.schedule(id, now_schedule).await,
+        }
+    }
+
+    /// Posts the same video and copy to the same destination again, as a new publication
+    /// approved by the owner to go out now (e.g. after deleting the first post, or to undo a
+    /// Skip).
+    pub async fn republish(&self, id: PublicationId) -> AppResult<PublicationView> {
+        let original = self.store.publications().require(id).await?;
+        let content = original.content().clone();
+        let variant = self.store.variants().require(content.variant_id).await?;
+        let mut fresh = RevisionContent::new(
+            variant.id,
+            variant.revision(),
+            &content.caption,
+            &content.hashtags,
+            content.destination,
+        )?;
+        fresh.options = content.options.clone();
+        let publication = Publication::draft(original.asset_id(), fresh, None, self.now());
+        self.store.publications().insert(&publication).await?;
+        self.emit(AppEvent::PublicationChanged {
+            id: publication.id().to_string(),
+        });
+        self.render_variant(variant.id).await?;
+        let rendered = self
+            .store
+            .variants()
+            .require(variant.id)
+            .await?
+            .render()
+            .is_some_and(|r| std::path::Path::new(&r.path).is_file());
+        if rendered {
+            self.publish_now(publication.id()).await
+        } else {
+            // Waits for the render; Publish now / Approve finish it.
+            let p = self
+                .transition(publication.id(), |_| PublicationEvent::SubmitForReview)
+                .await?;
+            self.schedule(p.id(), ScheduleInput::Now).await
+        }
     }
 
     pub async fn retry_publication(&self, id: PublicationId) -> AppResult<PublicationView> {
@@ -474,10 +568,12 @@ impl App {
         let now = self.now();
         let revision = p.revision().number;
         let open = jobs.open_for(JobKind::PublishPublication, &subject).await?;
-        match p.due_at() {
+        // The cloud runner executes publications it owns; this computer keeps no job for them.
+        let due = p.due_at().filter(|_| p.owner() == ExecutionOwner::Desktop);
+        match due {
             Some(at) => {
                 if let Some(job) = open {
-                    let same = pipeline::job_revision(&job) == Some(revision);
+                    let same = shorts_publish::job_revision(&job) == Some(revision);
                     match job.state() {
                         JobState::Running => {}
                         JobState::Queued if same => {
@@ -497,7 +593,7 @@ impl App {
                         .await?
                         .filter(|j| {
                             matches!(j.state(), JobState::Failed | JobState::Expired)
-                                && pipeline::job_revision(j) == Some(revision)
+                                && shorts_publish::job_revision(j) == Some(revision)
                         });
                     match resumable {
                         // Keeps the checkpoint, so a retry resumes where it stopped.
@@ -509,13 +605,14 @@ impl App {
                 }
             }
             None => {
-                let withdrawn = matches!(
-                    p.state(),
-                    PublicationState::Draft
-                        | PublicationState::AwaitingApproval
-                        | PublicationState::Cancelled
-                        | PublicationState::Published
-                );
+                let withdrawn = p.owner() != ExecutionOwner::Desktop
+                    || matches!(
+                        p.state(),
+                        PublicationState::Draft
+                            | PublicationState::AwaitingApproval
+                            | PublicationState::Cancelled
+                            | PublicationState::Published
+                    );
                 if withdrawn && let Some(job) = open {
                     jobs.modify(job.id(), |j| j.cancel(now)).await?;
                 }
@@ -526,15 +623,7 @@ impl App {
     }
 
     async fn enqueue_publish(&self, p: &Publication, at: DateTime<Utc>) -> AppResult<()> {
-        let job = Job::new(
-            JobKind::PublishPublication,
-            p.id().to_string(),
-            json!({ "revision": p.revision().number }),
-            at,
-            true,
-            PUBLISH_MAX_FAILURES,
-            self.now(),
-        );
+        let job = shorts_publish::publish_job(p, at, PUBLISH_MAX_FAILURES, self.now());
         match self.store.jobs().insert(&job).await {
             Ok(()) => Ok(()),
             Err(StoreError::DuplicateOpenJob { .. }) => {
@@ -572,6 +661,38 @@ impl App {
             Some(UserAction::PostManually { package_dir }) => Some(package_dir.clone()),
             _ => None,
         };
+        let progress = if p.state().is_active() {
+            self.store
+                .jobs()
+                .open_for(JobKind::PublishPublication, &p.id().to_string())
+                .await?
+                .as_ref()
+                .and_then(shorts_publish::progress)
+        } else {
+            None
+        };
+        let blockers = if p.state() == PublicationState::AwaitingApproval {
+            match self.checks(p).await {
+                Ok(c) => c.issues.iter().map(ToString::to_string).collect(),
+                Err(_) => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
+        let rendering = p.state() == PublicationState::AwaitingApproval
+            && self
+                .store
+                .jobs()
+                .open_for(JobKind::RenderVariant, &content.variant_id.to_string())
+                .await?
+                .is_some();
+        let published_private = is_private(p);
+        let (status_label, tone) = status_label(
+            p,
+            &blockers,
+            rendering,
+            progress.as_ref().and_then(|g| g.fraction),
+        );
         Ok(PublicationView {
             id: p.id().to_string(),
             asset_id: p.asset_id().to_string(),
@@ -595,10 +716,63 @@ impl App {
             last_error: p.last_error().map(str::to_owned),
             package_dir,
             published_url: p.published().and_then(|r| r.url.clone()),
+            published_note: p.published().and_then(|r| r.note.clone()),
+            progress_fraction: progress.as_ref().and_then(|g| g.fraction),
+            progress_text: progress.and_then(|g| g.detail),
             status_text: status_text(p, &account_name),
-            actions: actions(p),
+            status_label,
+            tone,
+            approved_by: p.approval().map(|a| a.approved_by.clone()),
+            blockers,
+            published_private,
+            actions: actions(p, crate::cloud::settings(self).await?.enabled),
+            owner: p.owner(),
+            cloud_note: self.cloud_note(p.id()),
             updated_at: p.record().updated_at,
         })
+    }
+}
+
+/// A YouTube upload that ended up private: it is on the channel, but not published.
+fn is_private(p: &Publication) -> bool {
+    p.platform() == shorts_domain::Platform::YoutubeShorts
+        && p.published()
+            .and_then(|r| r.note.as_deref())
+            .is_some_and(|n| n.to_lowercase().contains("private"))
+}
+
+/// The short status pill ("Published", "Processing 40%", …) and its tone.
+fn status_label(
+    p: &Publication,
+    blockers: &[String],
+    rendering: bool,
+    progress: Option<f64>,
+) -> (String, &'static str) {
+    use PublicationState as S;
+    let not_rendered = ValidationIssue::NotRendered.to_string();
+    match p.state() {
+        S::Draft => ("Draft".into(), "muted"),
+        S::AwaitingApproval if rendering || blockers == [not_rendered.clone()] => {
+            ("Preparing video".into(), "info")
+        }
+        S::AwaitingApproval if !blockers.is_empty() => ("Needs attention".into(), "warn"),
+        S::AwaitingApproval => ("Waiting for review".into(), "warn"),
+        S::Scheduled => ("Scheduled".into(), "info"),
+        S::Preparing | S::Uploading | S::Processing | S::Publishing => match progress {
+            Some(f) => (format!("Processing {:.0}%", f * 100.0), "info"),
+            None => ("Processing".into(), "info"),
+        },
+        S::Published if is_private(p) => ("Uploaded (private)".into(), "warn"),
+        S::Published if p.published().is_some_and(|r| r.manual) => {
+            ("Posted manually".into(), "good")
+        }
+        S::Published => ("Published".into(), "good"),
+        S::RetryScheduled => ("Retrying".into(), "warn"),
+        S::NeedsAuthentication => ("Needs reconnect".into(), "bad"),
+        S::NeedsUserAction => ("Needs you".into(), "warn"),
+        S::OutcomeUnknown => ("Check the platform".into(), "bad"),
+        S::Failed => ("Failed".into(), "bad"),
+        S::Cancelled => ("Skipped".into(), "muted"),
     }
 }
 
@@ -618,6 +792,9 @@ fn format_local(s: &Schedule) -> String {
 
 fn status_text(p: &Publication, account: &str) -> String {
     use PublicationState as S;
+    if p.owner() == ExecutionOwner::Cloud {
+        return cloud_status_text(p, account);
+    }
     let err = p.last_error().unwrap_or("unknown error");
     match p.state() {
         S::Draft => "Draft: submit it for review when the video and copy are ready.".into(),
@@ -630,6 +807,11 @@ fn status_text(p: &Publication, account: &str) -> String {
         S::Uploading => "Uploading…".into(),
         S::Processing => "Waiting for the platform to process the video…".into(),
         S::Publishing => "Publishing…".into(),
+        S::Published if is_private(p) => format!(
+            "Uploaded to {} as private, so only you can see it. Make it public in YouTube Studio \
+             (Content → Visibility), or switch the channel to public uploads in Connections.",
+            account
+        ),
         S::Published => match p.published() {
             Some(r) => match (&r.url, r.manual) {
                 (Some(url), true) => format!("Posted manually: {url}"),
@@ -661,10 +843,63 @@ fn status_text(p: &Publication, account: &str) -> String {
     }
 }
 
-fn actions(p: &Publication) -> Vec<Action> {
+/// While the cloud runner owns it, the text says so, and anything the user must decide is
+/// done after taking it back.
+fn cloud_status_text(p: &Publication, account: &str) -> String {
+    use PublicationState as S;
+    let err = p.last_error().unwrap_or("unknown error");
+    match p.state() {
+        S::Scheduled => match p.schedule() {
+            Some(s) => format!(
+                "The cloud runner posts it {}, even if this computer is off.",
+                format_local(s)
+            ),
+            None => "The cloud runner has it.".into(),
+        },
+        S::Preparing | S::Uploading | S::Processing | S::Publishing => {
+            "The cloud runner is publishing it…".into()
+        }
+        S::Published => match p.published().and_then(|r| r.url.clone()) {
+            Some(url) => format!("Published by the cloud runner: {url}"),
+            None => "Published by the cloud runner.".into(),
+        },
+        S::RetryScheduled => match p.retry_at() {
+            Some(at) => format!(
+                "The cloud runner retries at {} UTC after: {err}",
+                at.format("%Y-%m-%d %H:%M")
+            ),
+            None => format!("The cloud runner will retry after: {err}"),
+        },
+        S::NeedsAuthentication => format!(
+            "Reconnect {account} on this computer; the cloud runner gets the new sign-in and              continues: {err}"
+        ),
+        S::NeedsUserAction => format!(
+            "The cloud runner needs you: {}. Take it back to deal with it here.",
+            p.user_action()
+                .map(shorts_domain::UserAction::describe)
+                .unwrap_or_else(|| err.to_owned())
+        ),
+        S::OutcomeUnknown => format!(
+            "The platform may or may not have published this ({err}). Check {}, then take it              back and record what happened; it will not be retried automatically.",
+            p.platform()
+        ),
+        S::Failed => format!("The cloud runner gave up: {err}. Take it back to retry or edit it."),
+        S::Draft | S::AwaitingApproval | S::Cancelled => "The cloud runner has it.".into(),
+    }
+}
+
+fn actions(p: &Publication, cloud_enabled: bool) -> Vec<Action> {
     use Action as A;
     use PublicationState as S;
-    match p.state() {
+    if p.owner() == ExecutionOwner::Cloud {
+        // Everything else waits until it is back on this computer.
+        return match p.state() {
+            S::Published => vec![],
+            S::NeedsAuthentication => vec![A::Reconnect, A::TakeBack],
+            _ => vec![A::TakeBack],
+        };
+    }
+    let mut actions = match p.state() {
         S::Draft => vec![
             A::Edit,
             A::SubmitForReview,
@@ -675,6 +910,7 @@ fn actions(p: &Publication) -> Vec<Action> {
         S::AwaitingApproval => vec![
             A::Review,
             A::Approve,
+            A::PublishNow,
             A::Edit,
             A::Reschedule,
             A::ExportPackage,
@@ -690,9 +926,11 @@ fn actions(p: &Publication) -> Vec<Action> {
             A::Cancel,
         ],
         S::Preparing | S::Uploading | S::Processing => vec![A::Cancel],
-        S::Publishing | S::Cancelled => vec![],
-        S::Published => vec![A::ExportPackage],
-        S::RetryScheduled | S::NeedsAuthentication => vec![A::Edit, A::RevokeApproval, A::Cancel],
+        S::Publishing => vec![],
+        S::Cancelled => vec![A::Republish],
+        S::Published => vec![A::Republish, A::ExportPackage],
+        S::RetryScheduled => vec![A::Edit, A::RevokeApproval, A::Cancel],
+        S::NeedsAuthentication => vec![A::Reconnect, A::Edit, A::RevokeApproval, A::Cancel],
         S::NeedsUserAction => match p.user_action() {
             Some(UserAction::PostManually { .. }) => {
                 vec![A::ConfirmPosted, A::ExportPackage, A::Edit, A::Cancel]
@@ -704,7 +942,11 @@ fn actions(p: &Publication) -> Vec<Action> {
         },
         S::OutcomeUnknown => vec![A::ResolveOutcome],
         S::Failed => vec![A::Retry, A::Edit, A::RevokeApproval, A::Cancel],
+    };
+    if cloud_enabled && p.state() == S::Scheduled {
+        actions.insert(1, A::SendToCloud);
     }
+    actions
 }
 
 #[cfg(test)]

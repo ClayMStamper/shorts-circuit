@@ -39,6 +39,13 @@ pub struct Capabilities {
     pub native_scheduling: bool,
     pub analytics: bool,
     pub manual_handoff: bool,
+    /// Uploads end up private whatever the publication asks for, e.g. while the YouTube API
+    /// project hasn't passed Google's compliance audit.
+    #[serde(default)]
+    pub private_only: bool,
+    /// Plain-language limits worth showing next to the account (quotas, visibility).
+    #[serde(default)]
+    pub notes: Vec<String>,
     pub checked_at: DateTime<Utc>,
 }
 
@@ -55,7 +62,23 @@ impl Capabilities {
             native_scheduling: false,
             analytics: false,
             manual_handoff: true,
+            private_only: false,
+            notes: Vec::new(),
             checked_at: now,
+        }
+    }
+
+    /// The record for an API account whose sign-in is gone (disconnected, expired, revoked):
+    /// export packages until the user reconnects.
+    pub fn reconnect_required(reason: &str, now: DateTime<Utc>) -> Self {
+        Self {
+            publish_access: PublishAccess::ManualOnly {
+                missing: MissingCapability {
+                    reason: reason.to_owned(),
+                    next_action: NextAction::Reconnect,
+                },
+            },
+            ..Self::manual_only(now)
         }
     }
 
@@ -109,5 +132,26 @@ mod tests {
             }
             PublishAccess::Automatic => panic!("expected manual only"),
         }
+    }
+
+    #[test]
+    fn disconnected_api_accounts_ask_to_reconnect() {
+        let now = DateTime::from_timestamp(1_790_000_000, 0).unwrap();
+        let c = Capabilities::reconnect_required("Signed out", now);
+        assert!(!c.can_publish_automatically());
+        assert!(c.manual_handoff);
+        assert!(matches!(
+            c.publish_access,
+            PublishAccess::ManualOnly { missing } if missing.next_action == NextAction::Reconnect
+        ));
+    }
+
+    #[test]
+    fn old_capability_records_still_load() {
+        let raw = r#"{"publish_access":{"kind":"automatic"},"native_scheduling":false,
+            "analytics":false,"manual_handoff":true,"checked_at":"2026-10-01T00:00:00Z"}"#;
+        let c: Capabilities = serde_json::from_str(raw).unwrap();
+        assert!(!c.private_only);
+        assert!(c.notes.is_empty());
     }
 }

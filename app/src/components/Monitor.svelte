@@ -10,7 +10,13 @@
     revision,
     onReview,
     onOpenAsset,
-  }: { revision: number; onReview: (id: string) => void; onOpenAsset: (id: string) => void } = $props();
+    onSettings = () => {},
+  }: {
+    revision: number;
+    onReview: (id: string) => void;
+    onOpenAsset: (id: string) => void;
+    onSettings?: () => void;
+  } = $props();
 
   let data = $state<MonitorView | null>(null);
   let postedUrl = $state<Record<string, string>>({});
@@ -70,6 +76,13 @@
         return;
       case "exportPackage":
         return run(() => api.exportPackage(p.id), "Exporting package…");
+      case "reconnect":
+        toast(`Reconnect ${p.accountName} under YouTube Shorts publishing; the upload continues by itself.`, "info");
+        return onSettings();
+      case "sendToCloud":
+        return run(() => api.sendToCloud(p.id), "The cloud runner has it now.");
+      case "takeBack":
+        return run(() => api.takeBackFromCloud(p.id), "Back on this computer.");
     }
   }
 
@@ -104,7 +117,17 @@
             <td>{p.platformName}<br /><span class="muted">{p.accountName}</span></td>
             <td>
               <Badge state={p.state} />
+              {#if p.owner === "cloud"}<span class="note" data-testid="cloud-owned">cloud</span>{/if}
               <div class="status-text">{p.statusText}</div>
+              {#if p.cloudNote}<div class="note" data-testid="cloud-note">{p.cloudNote}</div>{/if}
+              {#if p.progressFraction !== null && p.state === "uploading"}
+                <progress max="1" value={p.progressFraction}></progress> {Math.round(p.progressFraction * 100)}%
+              {/if}
+              {#if p.progressText}<div class="muted" data-testid="progress">{p.progressText}</div>{/if}
+              {#if p.publishedUrl && !p.publishedUrl.startsWith("file:")}
+                <button class="link" onclick={() => run(() => api.openLink(p.publishedUrl!))}>Open on {p.platformName}</button>
+              {/if}
+              {#if p.publishedNote}<div class="note" data-testid="published-note">{p.publishedNote}</div>{/if}
             </td>
             <td>{p.scheduledLocal ?? "—"}</td>
             <td class="actions">

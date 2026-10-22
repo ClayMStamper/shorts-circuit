@@ -3,7 +3,7 @@
   import { formatBytes, formatDuration } from "../lib/format";
   import { defaultRecipe } from "../lib/recipe";
   import { fileUrl, pickFiles, VIDEO_EXTENSIONS } from "../lib/tauri";
-  import type { AssetDetail, PermissionStatus } from "../lib/types";
+  import type { AssetDetail, CollectionView, PermissionStatus } from "../lib/types";
   import Badge from "./Badge.svelte";
   import PublicationForm from "./PublicationForm.svelte";
   import Stars from "./Stars.svelte";
@@ -32,9 +32,15 @@
   let audioNote = $state("");
   let openVariant = $state<string | null>(null);
   let creatingPublication = $state(false);
+  let collections = $state<CollectionView[]>([]);
+  let addCollection = $state("");
 
   async function load() {
     try {
+      api
+        .listCollections()
+        .then((c) => (collections = c))
+        .catch(() => {});
       const d = await api.assetDetail(id);
       const first = detail === null || detail.asset.id !== d.asset.id;
       detail = d;
@@ -101,6 +107,28 @@
     }
   }
 
+  async function joinCollection(event: SubmitEvent) {
+    event.preventDefault();
+    if (!addCollection) return;
+    try {
+      const created = await api.addToCollection(addCollection, id);
+      addCollection = "";
+      if (created.length > 0) toast(`Rules created ${created.length} publication(s) for review`, "good");
+      await load();
+    } catch (e) {
+      errorToast(e);
+    }
+  }
+
+  async function leaveCollection(collectionId: string) {
+    try {
+      await api.removeFromCollection(collectionId, id);
+      await load();
+    } catch (e) {
+      errorToast(e);
+    }
+  }
+
   const permissionOptions: PermissionStatus[] = ["unknown", "granted", "denied"];
 </script>
 
@@ -121,6 +149,12 @@
           </p>
         {:else}
           <div class="placeholder-box">
+            {#if a.sourcePost}
+              <p>
+                Detected on TikTok (posted {new Date(a.sourcePost.postedAt).toLocaleString()}). Save the original file to
+                the watch folder and confirm the match in the library, or attach it here.
+              </p>
+            {/if}
             <p>This item has no video yet.</p>
             <button class="primary" onclick={attachMedia}>Attach video…</button>
           </div>
@@ -150,6 +184,26 @@
             <input placeholder="Add tags" bind:value={newTag} />
             <button type="submit">Add</button>
           </form>
+        </div>
+
+        <div class="field">
+          <span class="label">Collections</span>
+          <div class="tags editable">
+            {#each detail.collections as c (c.id)}
+              <span class="chip">{c.name} <button aria-label={`Remove from ${c.name}`} onclick={() => leaveCollection(c.id)}>×</button></span>
+            {/each}
+          </div>
+          {#if collections.some((c) => !detail?.collections.some((m) => m.id === c.id))}
+            <form class="inline" onsubmit={joinCollection}>
+              <select bind:value={addCollection} aria-label="Add to collection">
+                <option value="">Add to collection…</option>
+                {#each collections.filter((c) => !detail?.collections.some((m) => m.id === c.id)) as c (c.id)}
+                  <option value={c.id}>{c.name}{c.rules.some((r) => r.enabled) ? " (has rules)" : ""}</option>
+                {/each}
+              </select>
+              <button type="submit" disabled={!addCollection}>Add</button>
+            </form>
+          {/if}
         </div>
 
         <fieldset class="permissions">

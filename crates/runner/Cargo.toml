@@ -1,0 +1,42 @@
+[package]
+name = "shorts-runner"
+description = "Optional cloud runner: executes approved publications handed over by the desktop app while the computer is off, against PostgreSQL, with encrypted credentials."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+aes-gcm.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+hex.workspace = true
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+shorts-adapters.workspace = true
+shorts-cloud.workspace = true
+shorts-domain.workspace = true
+shorts-publish.workspace = true
+shorts-scheduler.workspace = true
+sqlx = { workspace = true, features = ["postgres", "uuid"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+wiremock.workspace = true

@@ -6,10 +6,12 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use shorts_domain::{
-    Asset, AssetStatus, AttemptOutcome, Checksum, ConnectedAccount, Destination, Job, JobKind,
-    JobState, MediaFile, MediaFileId, MediaProperties, OverduePolicy, PermissionStatus, Platform,
-    Publication, PublicationEvent, PublicationState, PublishAttempt, Rating, RenderRecipe,
-    RevisionContent, Schedule, Tag, TimeZoneName, Variant,
+    Asset, AssetStatus, AttemptOutcome, Checksum, Collection, CollectionRule, ConnectedAccount,
+    Destination, ExecutionOwner, HandoverId, InFlight, Job, JobKind, JobState, MediaFile,
+    MediaFileId, MediaProperties, OverduePolicy, PermissionStatus, Platform, Publication,
+    PublicationEvent, PublicationState, PublishAttempt, Rating, RenderRecipe, RevisionContent,
+    RuleFiring, RuleId, RuleOutput, RuleSpec, Schedule, Tag, TikTokPost, TimeZoneName,
+    TransitionError, UnattendedGrant, Variant, Workflow, WorkflowSettings,
 };
 use shorts_store::{AssetFilter, JobFilter, PublicationFilter, Store, StoreError};
 use tempfile::TempDir;
@@ -854,4 +856,541 @@ async fn latest_job_for_a_subject_includes_closed_jobs() {
         .unwrap();
     // Job ids are time-ordered, and the second was created later.
     assert_eq!(latest.id(), second.id());
+}
+
+#[tokio::test]
+async fn collections_hold_members_rules_and_grants() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 40).await;
+    let c = Collection::new("Best of", t0()).unwrap();
+    store.collections().insert(&c).await.unwrap();
+    let clash = Collection::new("best OF", t0()).unwrap();
+    assert!(matches!(
+        store.collections().insert(&clash).await,
+        Err(StoreError::DuplicateName { .. })
+    ));
+
+    assert!(
+        store
+            .collections()
+            .add_member(c.id, f.asset.id, t0())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .collections()
+            .add_member(c.id, f.asset.id, t0())
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        store.collections().members(c.id).await.unwrap(),
+        vec![f.asset.id]
+    );
+    assert_eq!(
+        store.collections().of_asset(f.asset.id).await.unwrap(),
+        vec![c.clone()]
+    );
+    assert_eq!(store.collections().list().await.unwrap()[0].member_count, 1);
+
+    let rule = CollectionRule::new(
+        c.id,
+        RuleSpec {
+            name: "Cross-post".into(),
+            enabled: true,
+            destinations: vec![f.account.id],
+            output: RuleOutput::AwaitingApproval,
+            caption_template: "{title}".into(),
+            hashtags: vec![],
+            include_asset_tags: false,
+        },
+        None,
+        t0(),
+    )
+    .unwrap();
+    store.collections().insert_rule(&rule).await.unwrap();
+    assert_eq!(
+        store
+            .collections()
+            .member_since(c.id, f.asset.id)
+            .await
+            .unwrap(),
+        Some(t0())
+    );
+    assert_eq!(
+        store.collections().rules(c.id).await.unwrap(),
+        vec![rule.clone()]
+    );
+
+    assert!(
+        store
+            .collections()
+            .grant(c.id, f.account.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let grant = UnattendedGrant {
+        collection_id: c.id,
+        account_id: f.account.id,
+        enabled_at: t0(),
+        enabled_by: "owner".into(),
+    };
+    store.collections().set_grant(&grant).await.unwrap();
+    assert_eq!(
+        store.collections().grant(c.id, f.account.id).await.unwrap(),
+        Some(grant)
+    );
+
+    // Deleting the collection removes rules, grants and memberships, not the asset.
+    store.collections().delete(c.id).await.unwrap();
+    assert!(store.collections().rule(rule.id).await.unwrap().is_none());
+    assert!(
+        store
+            .collections()
+            .of_asset(f.asset.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(store.assets().get(f.asset.id).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn a_rule_fires_once_per_asset_and_account() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 41).await;
+    let rule_id = RuleId::new();
+    let first = draft(&f);
+    let firing = RuleFiring {
+        rule_id,
+        asset_id: f.asset.id,
+        account_id: f.account.id,
+        publication_id: first.id(),
+        unattended: true,
+        auto_approved_at: None,
+        fired_at: t0(),
+    };
+    assert!(store.record_rule_firing(&firing, &first).await.unwrap());
+    assert!(
+        store
+            .collections()
+            .firing_exists(rule_id, f.asset.id, f.account.id)
+            .await
+            .unwrap()
+    );
+
+    // A second firing for the same triple writes nothing, not even the publication.
+    let second = draft(&f);
+    let again = RuleFiring {
+        publication_id: second.id(),
+        ..firing.clone()
+    };
+    assert!(!store.record_rule_firing(&again, &second).await.unwrap());
+    assert!(
+        store
+            .publications()
+            .get(second.id())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(store.collections().fired_count(rule_id).await.unwrap(), 1);
+
+    assert!(
+        store
+            .collections()
+            .mark_auto_approved(first.id(), t0())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !store
+            .collections()
+            .mark_auto_approved(first.id(), t0())
+            .await
+            .unwrap()
+    );
+    let stored = store
+        .collections()
+        .firing_for_publication(first.id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.auto_approved_at, Some(t0()));
+}
+
+fn tiktok_post(asset: &Asset, video_id: &str) -> TikTokPost {
+    TikTokPost {
+        video_id: video_id.into(),
+        asset_id: asset.id,
+        posted_at: t0(),
+        duration_ms: Some(20_000),
+        title: asset.title.clone(),
+        caption: "caption #bread".into(),
+        share_url: Some(format!("https://www.tiktok.com/@test/video/{video_id}")),
+        cover_url: None,
+        cover_path: None,
+        discovered_at: t0(),
+        matched_at: None,
+    }
+}
+
+#[tokio::test]
+async fn tiktok_posts_are_recorded_once_and_merged_into_the_imported_file() {
+    let (_dir, store) = store().await;
+    let item = Asset::awaiting_media("Bagels", Some("https://www.tiktok.com/@test/video/1"), t0())
+        .unwrap();
+    let post = tiktok_post(&item, "1");
+    assert!(store.record_tiktok_post(&item, &post).await.unwrap());
+    // The same post again writes nothing (not even a second item).
+    let again = Asset::awaiting_media("Bagels", None, t0()).unwrap();
+    assert!(
+        !store
+            .record_tiktok_post(&again, &tiktok_post(&again, "1"))
+            .await
+            .unwrap()
+    );
+    assert!(store.assets().get(again.id).await.unwrap().is_none());
+    assert_eq!(
+        store.tiktok_posts().pending().await.unwrap(),
+        vec![post.clone()]
+    );
+
+    let c = Collection::new("Phone", t0()).unwrap();
+    store.collections().insert(&c).await.unwrap();
+    store
+        .collections()
+        .add_member(c.id, item.id, t0())
+        .await
+        .unwrap();
+
+    // Refused while the "awaiting" item actually has media.
+    let f = fixture(&store, 50).await;
+    assert!(
+        store
+            .merge_tiktok_match("1", f.asset.id, &f.asset, t0())
+            .await
+            .is_err()
+    );
+
+    let mut target = f.asset.clone();
+    target.title = "Bagels".into();
+    store
+        .merge_tiktok_match("1", item.id, &target, t0())
+        .await
+        .unwrap();
+    assert!(store.assets().get(item.id).await.unwrap().is_none());
+    assert_eq!(
+        store.assets().require(f.asset.id).await.unwrap().title,
+        "Bagels"
+    );
+    let moved = store.tiktok_posts().require("1").await.unwrap();
+    assert_eq!(moved.asset_id, f.asset.id);
+    assert_eq!(moved.matched_at, Some(t0()));
+    assert!(store.tiktok_posts().pending().await.unwrap().is_empty());
+    assert_eq!(
+        store.collections().members(c.id).await.unwrap(),
+        vec![f.asset.id]
+    );
+    assert!(
+        store
+            .tiktok_posts()
+            .linked_assets()
+            .await
+            .unwrap()
+            .contains(&f.asset.id)
+    );
+
+    store
+        .tiktok_posts()
+        .dismiss("1", f.asset.id, t0())
+        .await
+        .unwrap();
+    store
+        .tiktok_posts()
+        .dismiss("1", f.asset.id, t0())
+        .await
+        .unwrap();
+    assert_eq!(store.tiktok_posts().dismissed().await.unwrap().len(), 1);
+    let window = store
+        .media_files()
+        .imported_between(t0() - Duration::hours(1), t0() + Duration::hours(1))
+        .await
+        .unwrap();
+    assert_eq!(window.len(), 1);
+}
+
+#[tokio::test]
+async fn quota_spend_accumulates_per_bucket_and_day() {
+    let (_dir, store) = store().await;
+    let q = store.quota();
+    let day = chrono::NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+    let next = day.succ_opt().unwrap();
+    assert_eq!(q.used("youtube:units", day).await.unwrap(), 0);
+    assert_eq!(q.spend("youtube:units", day, 1).await.unwrap(), 1);
+    assert_eq!(q.spend("youtube:units", day, 2).await.unwrap(), 3);
+    assert_eq!(q.spend("youtube:uploads", day, 1).await.unwrap(), 1);
+    assert_eq!(q.spend("youtube:units", next, 5).await.unwrap(), 5);
+    assert_eq!(q.used("youtube:units", day).await.unwrap(), 3);
+
+    q.exhaust("youtube:units", day, 10_000).await.unwrap();
+    assert_eq!(q.used("youtube:units", day).await.unwrap(), 10_000);
+    // Exhausting never lowers a count.
+    q.exhaust("youtube:units", day, 50).await.unwrap();
+    assert_eq!(q.used("youtube:units", day).await.unwrap(), 10_000);
+
+    assert_eq!(q.prune_before(next).await.unwrap(), 2);
+    assert_eq!(q.used("youtube:units", next).await.unwrap(), 5);
+}
+
+// --- execution ownership --------------------------------------------------------------------
+
+/// An approved publication with its queued publish job, due at `t0`.
+async fn scheduled_with_job(store: &Store, f: &Fixture) -> (Publication, Job) {
+    let mut p = draft(f);
+    store.publications().insert(&p).await.unwrap();
+    for event in [
+        PublicationEvent::SubmitForReview,
+        PublicationEvent::Approve {
+            revision: 1,
+            current_variant_revision: 1,
+            by: "owner".into(),
+        },
+    ] {
+        let t = p.apply(event, t0()).unwrap();
+        store.publications().save(&p, &t).await.unwrap();
+    }
+    let job = job(&p.id().to_string(), t0());
+    store.jobs().insert(&job).await.unwrap();
+    (p, job)
+}
+
+#[tokio::test]
+async fn handing_over_moves_ownership_and_cancels_the_desktop_job() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 21).await;
+    let (p, job) = scheduled_with_job(&store, &f).await;
+
+    let handover = HandoverId::new();
+    let moved = store
+        .hand_over_to_cloud(p.id(), handover, t0(), |_| false)
+        .await
+        .unwrap();
+    assert_eq!(moved.owner(), ExecutionOwner::Cloud);
+    assert_eq!(moved.handover(), Some(handover));
+    let loaded = store.publications().require(p.id()).await.unwrap();
+    assert_eq!(loaded, moved);
+    assert_eq!(
+        store.jobs().require(job.id()).await.unwrap().state(),
+        JobState::Cancelled
+    );
+    let log = store.publications().log(p.id()).await.unwrap();
+    assert_eq!(log.last().unwrap().event, "hand_to_cloud");
+    let cloud = store
+        .publications()
+        .list(&PublicationFilter {
+            owner: Some(ExecutionOwner::Cloud),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(cloud.len(), 1);
+
+    // Even a publish job enqueued afterwards is never claimed on the desktop.
+    store
+        .jobs()
+        .insert(&self::job(&p.id().to_string(), t0()))
+        .await
+        .unwrap();
+    assert!(
+        store
+            .jobs()
+            .claim_next("desktop:w", t0(), Duration::seconds(60), &[])
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn handing_over_is_refused_while_the_desktop_job_runs_or_reached_the_platform() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 22).await;
+    let (p, job) = scheduled_with_job(&store, &f).await;
+
+    let err = store
+        .hand_over_to_cloud(p.id(), HandoverId::new(), t0(), |_| true)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        StoreError::Transition(TransitionError::InFlight(InFlight::ReachedProvider))
+    ));
+
+    let claimed = store
+        .jobs()
+        .claim_next("desktop:w", t0(), Duration::seconds(60), &[])
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(claimed.id(), job.id());
+    let err = store
+        .hand_over_to_cloud(p.id(), HandoverId::new(), t0(), |_| false)
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        StoreError::Transition(TransitionError::InFlight(InFlight::JobRunning))
+    ));
+    let loaded = store.publications().require(p.id()).await.unwrap();
+    assert_eq!(loaded.owner(), ExecutionOwner::Desktop);
+    let still = store.jobs().require(job.id()).await.unwrap();
+    assert_eq!(still.state(), JobState::Running);
+    assert_eq!(still.lease().unwrap().owner, "desktop:w");
+}
+
+/// The desktop worker claiming a job and the user handing its publication to the cloud race;
+/// exactly one wins, every time.
+#[tokio::test]
+async fn claiming_and_handing_over_never_both_win() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 23).await;
+    let (mut claims, mut handovers) = (0, 0);
+    for _ in 0..30 {
+        let (p, _) = scheduled_with_job(&store, &f).await;
+        let id = p.id();
+        let claimer = {
+            let store = store.clone();
+            tokio::spawn(async move {
+                store
+                    .jobs()
+                    .claim_next("desktop:w", t0(), Duration::seconds(60), &[])
+                    .await
+                    .unwrap()
+            })
+        };
+        let mover = {
+            let store = store.clone();
+            tokio::spawn(async move {
+                store
+                    .hand_over_to_cloud(id, HandoverId::new(), t0(), |_| false)
+                    .await
+            })
+        };
+        let claimed = claimer.await.unwrap();
+        let moved = mover.await.unwrap();
+        match (claimed, moved) {
+            (Some(job), Err(StoreError::Transition(TransitionError::InFlight(_)))) => {
+                assert_eq!(job.subject(), p.id().to_string());
+                claims += 1;
+                // Finish it so the next round's claim only sees the new job.
+                store
+                    .jobs()
+                    .modify(job.id(), |j| j.succeed("desktop:w", t0()))
+                    .await
+                    .unwrap();
+            }
+            (None, Ok(moved)) => {
+                assert_eq!(moved.owner(), ExecutionOwner::Cloud);
+                handovers += 1;
+            }
+            (claimed, moved) => panic!("both or neither won: {claimed:?} / {moved:?}"),
+        }
+    }
+    assert_eq!(claims + handovers, 30);
+}
+
+#[tokio::test]
+async fn workflows_wrap_a_rule_and_grant_and_go_with_them() {
+    let (_dir, store) = store().await;
+    let f = fixture(&store, 41).await;
+    let c = Collection::new("Source videos", t0()).unwrap();
+    store.collections().insert(&c).await.unwrap();
+    let spec = RuleSpec {
+        name: "TikTok → Instagram Reels".into(),
+        enabled: true,
+        destinations: vec![f.account.id],
+        output: RuleOutput::AwaitingApproval,
+        caption_template: String::new(),
+        hashtags: vec![],
+        include_asset_tags: false,
+    };
+    let rule = CollectionRule::new(c.id, spec.clone(), None, t0()).unwrap();
+    let workflow = Workflow::new(
+        rule.id,
+        c.id,
+        f.account.id,
+        WorkflowSettings::default(),
+        true,
+        t0(),
+    );
+    let grant = UnattendedGrant {
+        collection_id: c.id,
+        account_id: f.account.id,
+        enabled_at: t0(),
+        enabled_by: "owner".into(),
+    };
+    store
+        .workflows()
+        .create(&rule, &workflow, Some(&grant))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.workflows().list().await.unwrap(),
+        vec![workflow.clone()]
+    );
+    assert_eq!(
+        store.workflows().for_rule(rule.id).await.unwrap(),
+        Some(workflow.clone())
+    );
+    assert_eq!(
+        store.collections().rules(c.id).await.unwrap(),
+        vec![rule.clone()]
+    );
+    assert!(
+        store
+            .collections()
+            .grant(c.id, f.account.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // One workflow per collection and account; the failed attempt writes nothing.
+    let second = CollectionRule::new(c.id, spec, None, t0()).unwrap();
+    let dup = Workflow::new(
+        second.id,
+        c.id,
+        f.account.id,
+        WorkflowSettings::default(),
+        false,
+        t0(),
+    );
+    assert!(matches!(
+        store.workflows().create(&second, &dup, None).await,
+        Err(StoreError::DuplicateWorkflow { .. })
+    ));
+    assert_eq!(store.collections().rules(c.id).await.unwrap().len(), 1);
+
+    let mut edited = workflow.clone();
+    edited.confirm_rights(false, t0() + Duration::minutes(1));
+    store.workflows().update(&edited).await.unwrap();
+    assert_eq!(
+        store.workflows().require(workflow.id).await.unwrap(),
+        edited
+    );
+
+    store.workflows().delete(workflow.id).await.unwrap();
+    assert!(store.workflows().get(workflow.id).await.unwrap().is_none());
+    assert!(store.collections().rule(rule.id).await.unwrap().is_none());
+    assert!(
+        store
+            .collections()
+            .grant(c.id, f.account.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
