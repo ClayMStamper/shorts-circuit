@@ -16,7 +16,7 @@ use shorts_desktop::instagram::{InstagramConnector, InstagramSetup};
 use shorts_desktop::linkedin::{LinkedInConnector, LinkedInSetup};
 use shorts_desktop::snapchat::{SnapSetup, SnapchatConnector};
 use shorts_desktop::tiktok::{TikTokIntake, TikTokSetup};
-use shorts_desktop::watch::{WatchConfig, WatchFolder};
+use shorts_desktop::watch::{WatchConfig, WatchFolder, WatchKind};
 use shorts_desktop::youtube::{YouTubeConnector, YouTubeSetup};
 use shorts_desktop::{App, AppPaths, FfmpegBackend};
 use shorts_media::{MediaTools, RenderCache, Renderer};
@@ -53,19 +53,42 @@ pub struct Shell {
     /// Optional cloud runner; off until its address and token are saved in Settings.
     pub cloud: Arc<CloudSync>,
     pub(crate) watch: Mutex<Option<WatchFolder>>,
+    /// The downloads folder, watched only for originals of pending TikTok posts.
+    pub(crate) downloads_watch: Mutex<Option<WatchFolder>>,
     shutdown: CancellationToken,
 }
 
 impl Shell {
     /// (Re)starts the watch folder from the saved preference.
     pub async fn restart_watch(&self, handle: &tauri::AppHandle) {
-        let folder = match self.app.preferences().await {
-            Ok(prefs) => prefs.watch_folder,
+        let (folder, downloads) = match self.app.preferences().await {
+            Ok(prefs) => (prefs.watch_folder, prefs.downloads_folder),
             Err(e) => {
                 warn!(error = %e, "could not read preferences");
                 return;
             }
         };
+        {
+            let mut slot = self.downloads_watch.lock().expect("downloads watch lock");
+            *slot = None;
+            // The same folder as the watch folder needs no second watch.
+            if let Some(dir) = downloads.filter(|d| Some(d) != folder.as_ref()) {
+                match WatchFolder::start(
+                    self.app.clone(),
+                    PathBuf::from(&dir),
+                    WatchConfig {
+                        kind: WatchKind::Downloads,
+                        ..WatchConfig::default()
+                    },
+                ) {
+                    Ok(watch) => {
+                        info!(folder = %dir, "watching downloads for TikTok originals");
+                        *slot = Some(watch);
+                    }
+                    Err(e) => warn!(folder = %dir, error = %e, "cannot watch the downloads folder"),
+                }
+            }
+        }
         let mut slot = self.watch.lock().expect("watch lock");
         *slot = None;
         let Some(folder) = folder else { return };
@@ -170,6 +193,7 @@ async fn start(data_dir: PathBuf) -> Result<Shell, Box<dyn std::error::Error>> {
         snapchat,
         cloud,
         watch: Mutex::new(None),
+        downloads_watch: Mutex::new(None),
         shutdown,
     })
 }
@@ -255,6 +279,11 @@ pub fn run() {
             commands::set_unattended,
             commands::rule_activity,
             commands::check_watch_folder,
+            commands::get_original,
+            commands::cancel_get_original,
+            commands::send_to_workflows,
+            commands::attach_original,
+            commands::default_downloads_folder,
             commands::list_workflows,
             commands::workflow_detail,
             commands::create_workflow,

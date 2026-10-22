@@ -356,6 +356,8 @@ export interface Preferences {
   watchCollection: string | null;
   /** When the watch folder was last listed. */
   watchCheckedAt: string | null;
+  /** Also watched, only for videos downloaded from pending TikTok posts. Null = off. */
+  downloadsFolder: string | null;
 }
 
 export interface PreferencesUpdate {
@@ -365,6 +367,7 @@ export interface PreferencesUpdate {
   exportDir?: string | null;
   postingSlots?: PostingSlot[];
   watchCollection?: string | null;
+  downloadsFolder?: string | null;
 }
 
 export type ScheduleInput =
@@ -445,7 +448,15 @@ export type AppEvent =
   | { type: "snapchatChanged" }
   | { type: "cloudChanged" }
   | { type: "watchFolderChecked" }
-  | { type: "matchSuggested"; assetId: string | null };
+  | { type: "matchSuggested"; assetId: string | null }
+  | { type: "originalAttached"; assetId: string; title: string };
+
+/** What "Get original" did. */
+export interface GetOriginal {
+  downloadsFolder: string | null;
+  /** Picking up downloads was off and has just been turned on. */
+  enabledNow: boolean;
+}
 
 export interface CollectionRef {
   id: string;
@@ -486,6 +497,10 @@ export interface RuleItemView {
   sourcePostedAt: string | null;
   /** The original post (e.g. its TikTok link), when known. */
   sourceUrl: string | null;
+  /** "Get original" was clicked: a matching download is expected until then. */
+  expectingOriginalUntil: string | null;
+  /** Why a download wasn't taken for this post, e.g. a different length. */
+  downloadNote: string | null;
   /** In the collection, but the original file hasn't arrived yet. */
   waitingForMedia: boolean;
   /** Why nothing has been created yet, e.g. waiting for its TikTok caption. */

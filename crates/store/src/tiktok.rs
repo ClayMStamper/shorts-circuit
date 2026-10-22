@@ -77,6 +77,18 @@ impl<'a> TikTokPosts<'a> {
         rows.iter().map(|r| r.parsed("asset_id")).collect()
     }
 
+    /// Records when the post got its original file (attached directly, e.g. from a download).
+    pub async fn mark_matched(&self, video_id: &str, at: DateTime<Utc>) -> StoreResult<()> {
+        sqlx::query(
+            "UPDATE tiktok_posts SET matched_at = ? WHERE video_id = ? AND matched_at IS NULL",
+        )
+        .bind(ts(at))
+        .bind(video_id)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn set_cover_path(&self, video_id: &str, path: &str) -> StoreResult<()> {
         sqlx::query("UPDATE tiktok_posts SET cover_path = ? WHERE video_id = ?")
             .bind(path)

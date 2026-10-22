@@ -215,6 +215,19 @@ TikTok is used at most to notice that a post exists:
   files ever appears, a fetcher would attach the file to the awaiting item through the normal
   import path (`import_file` with `into`), leaving matching and rules unchanged.
 
+#### Originals downloaded from TikTok
+
+- The downloads folder can be watched in a second mode (`WatchKind::Downloads`): only files
+  modified after watching starts are considered, and a video is imported only when
+  `pick_post_for_download` attributes it to a pending TikTok post. It is then attached to that
+  post's waiting item (`import_file(path, into)`), keeping its caption, link and collections,
+  and the post is marked matched. Anything else is left in place, unimported.
+- "Get original" (`App::expect_original`) opens the post and remembers it for 30 minutes; a
+  requested post whose duration fits wins, even if it is older than the 72-hour window that
+  unrequested downloads (and the watch folder's matching) use. Without a request, the file must
+  fit exactly one pending post.
+- The owner clicks TikTok's own "Download video"; the app never automates TikTok's site.
+
 ### Media pipeline
 
 - Inspect originals with FFprobe.
